@@ -83,11 +83,17 @@ async def on_ready():
 
 @bot.command()
 async def pomoc(ctx):
-    embed = discord.Embed(title="🛠️ Menu", color=0xff9900)
-    embed.add_field(name="🔥 !hity", value="Najlepsze okazje (Ogólne)", inline=False)
-    embed.add_field(name="📈 !trend", value="Głęboka analiza kategorii", inline=False)
-    embed.add_field(name="💰 !marza [zakup]", value="Kalkulator cen", inline=False)
-    embed.add_field(name="📄 !gpsr [produkt]", value="Tekst prawny", inline=False)
+    # PRZYWRÓCONY WYGLĄD "CENTRUM DOWODZENIA"
+    embed = discord.Embed(
+        title="🛠️ Centrum Dowodzenia",
+        description="Witaj! Wybierz narzędzie:",
+        color=0xff7600
+    )
+    embed.add_field(name="🔥 Hity", value="`!hity [miesiąc]` - Główne okazje na rynku", inline=False)
+    embed.add_field(name="📈 Trendy", value="`!trend` - Głęboka analiza konkretnej kategorii", inline=False)
+    embed.add_field(name="📄 GPSR", value="`!gpsr [nazwa]` - Gotowy tekst prawny do aukcji", inline=False)
+    embed.add_field(name="💰 Marża", value="`!marza [zakup] [sprzedaż]` - Szybki kalkulator zysku", inline=False)
+    embed.set_footer(text="Analizy oparte o Perplexity Pro & Claude 3.5")
     await ctx.send(embed=embed)
 
 @bot.command()
