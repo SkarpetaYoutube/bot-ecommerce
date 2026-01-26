@@ -26,9 +26,10 @@ def clean_text(text):
     text = text.replace("<b>", "**").replace("</b>", "**")
     return text.strip()
 
-# --- LOGIKA AI ---
+# --- LOGIKA AI (Raporty jak ze screena) ---
 async def pobierz_analize_live(okres, kategoria):
     teraz = datetime.datetime.now().strftime("%d.%m.%Y")
+    
     if kategoria.lower() in ["wszystko", "all", "ogólne", "top", "hity"]:
         temat = "OGÓLNE BESTSELLERY"
         skupienie = "Cały polski rynek e-commerce."
@@ -36,19 +37,25 @@ async def pobierz_analize_live(okres, kategoria):
         temat = f"Kategoria: {kategoria}"
         skupienie = f"Nisza: {kategoria}."
 
+    # PROMPT SKONFIGUROWANY POD TWÓJ FORMAT
     prompt = f"""
     Jesteś Ekspertem E-commerce. Data: {teraz}. Analiza na: {okres}.
     TEMAT: {temat}. {skupienie}
     
     ZASADY: 
-    1. Zero HTML. Używaj Markdown (pogrubienia **, listy •).
-    2. Konkretne produkty z potencjałem zysku.
+    1. Zero HTML. Używaj Markdown.
+    2. Format ma być idealnie czytelny jak lista zadań.
     
-    STRUKTURA:
-    **[NAZWA PRODUKTU]**
-    • 💰 Cena: [zakres]
-    • 🚀 Potencjał: [krótki opis]
-    • ⚠️ Uwaga: [na co uważać]
+    STRUKTURA RAPORTU (Trzymaj się jej sztywno):
+    Dla każdego z 5 produktów wypisz:
+    
+    **[PEŁNA NAZWA PRODUKTU]**
+    • 💰 Cena: [zakres cenowy PLN]
+    • 🗓️ Start wystawiania: [Konkretna data, np. 01.02.2026]
+    • 📈 PEAK Sprzedaży: [Zakres dat, np. 10-20.02.2026]
+    • 💡 Dlaczego teraz: [Krótkie uzasadnienie jednym zdaniem]
+    
+    Na końcu dodaj sekcję: ⚠️ CZEGO UNIKAĆ (krótko).
     """
     try:
         response = await perplexity_client.chat.completions.create(
@@ -77,15 +84,15 @@ async def on_ready():
 @bot.command()
 async def pomoc(ctx):
     embed = discord.Embed(title="🛠️ Menu", color=0xff9900)
-    embed.add_field(name="🔥 !hity", value="Najlepsze okazje", inline=False)
-    embed.add_field(name="📈 !trend", value="Analiza kategorii", inline=False)
+    embed.add_field(name="🔥 !hity", value="Najlepsze okazje (Ogólne)", inline=False)
+    embed.add_field(name="📈 !trend", value="Głęboka analiza kategorii", inline=False)
     embed.add_field(name="💰 !marza [zakup]", value="Kalkulator cen", inline=False)
     embed.add_field(name="📄 !gpsr [produkt]", value="Tekst prawny", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
 async def hity(ctx, *, okres: str = None):
-    # POPRAWKA: Jeśli brak okresu, zapytaj o niego
+    # Logika: Jeśli brak okresu, zapytaj. Kategoria automatycznie "Wszystko".
     if not okres:
         await ctx.send("📅 Podaj miesiąc (np. *Marzec*):")
         try:
@@ -94,7 +101,7 @@ async def hity(ctx, *, okres: str = None):
         except asyncio.TimeoutError:
             return await ctx.send("⏰ Czas minął.")
 
-    msg = await ctx.send(f"⏳ **Szukam hitów na: {okres}...**")
+    msg = await ctx.send(f"⏳ **Szukam ogólnych hitów na: {okres}...**")
     raport = await pobierz_analize_live(okres, "Wszystko")
     if len(raport) > 4000: raport = raport[:4000] + "..."
     
@@ -103,18 +110,20 @@ async def hity(ctx, *, okres: str = None):
 
 @bot.command()
 async def trend(ctx, *, okres: str = None):
-    # POPRAWKA: Interaktywne dopytywanie
+    # Logika: Zawsze pyta o kategorię, bo to research szczegółowy.
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
     
+    # Krok 1: Jeśli user nie podał okresu w komendzie
     if not okres:
-        await ctx.send("📅 Jaki okres analizujemy? (np. *Luty*):")
+        await ctx.send("📅 O jaki miesiąc lub okres pytasz? (np. *Luty*):")
         try:
             okres_msg = await bot.wait_for('message', check=check, timeout=30)
             okres = okres_msg.content
         except asyncio.TimeoutError:
             return await ctx.send("⏰ Czas minął.")
 
-    await ctx.send(f"📂 Ok, okres: **{okres}**. Teraz podaj kategorię (np. *Ogród*):")
+    # Krok 2: Zawsze pytaj o kategorię (kluczowe dla !trend)
+    await ctx.send(f"📂 Jaka kategoria Cię interesuje? (np. *Dom i Ogród*, *Elektronika*):")
     try:
         kat_msg = await bot.wait_for('message', check=check, timeout=30)
         kategoria = kat_msg.content
@@ -125,7 +134,7 @@ async def trend(ctx, *, okres: str = None):
     raport = await pobierz_analize_live(okres, kategoria)
     if len(raport) > 4000: raport = raport[:4000] + "..."
 
-    embed = discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x2ecc71)
+    embed = discord.Embed(title=f"📈 Raport: {kategoria} ({okres})", description=raport, color=0x2ecc71)
     await status.edit(content=None, embed=embed)
 
 @bot.command()
@@ -148,7 +157,7 @@ async def marza(ctx, arg1: str = None, arg2: str = None):
         
         if arg2 is None:
             embed = discord.Embed(title=f"📊 Kalkulacja (Zakup: {zakup} zł)", color=0x3498db)
-            progi = [20, 30, 40, 50, 60, 70, 100] # Twoje progi
+            progi = [20, 30, 40, 50, 60, 70, 100] # PEŁNA LISTA
             for cel in progi:
                 cena = ((zakup_netto + cel) / 0.97) * 1.23
                 embed.add_field(name=f"+{cel} zł", value=f"**{cena:.2f} zł**", inline=True)
@@ -164,4 +173,7 @@ async def marza(ctx, arg1: str = None, arg2: str = None):
 
 if __name__ == "__main__":
     keep_alive()
-    bot.run(TOKEN)
+    if not TOKEN:
+        print("❌ Brak tokena!")
+    else:
+        bot.run(TOKEN)
