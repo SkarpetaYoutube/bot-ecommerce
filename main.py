@@ -7,11 +7,12 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI 
 from keep_alive import keep_alive 
 
-# --- KONFIGURACJA (Standardowe nazwy) ---
+# --- KONFIGURACJA ---
 TOKEN = os.environ.get("DISCORD_TOKEN")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
 
+# Używamy modelu Sonnet, bo najlepiej radzi sobie z formatowaniem tekstu prawnego
 claude_client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
 perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_API_KEY, base_url="https://api.perplexity.ai")
 
@@ -22,8 +23,8 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 # --- FUNKCJE POMOCNICZE ---
 def clean_text(text):
     if not text: return ""
-    text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
-    text = text.replace("<b>", "**").replace("</b>", "**")
+    # Usuwamy ewentualne pozostałości HTML/Markdown, choć prompt tego zabrania
+    text = text.replace("**", "").replace("##", "").replace("###", "")
     return text.strip()
 
 # --- LOGIKA AI ---
@@ -37,23 +38,22 @@ async def pobierz_analize_live(okres, kategoria):
         temat = f"Kategoria: {kategoria}"
         skupienie = f"Nisza: {kategoria}."
 
-    # PROMPT
     prompt = f"""
     Jesteś Ekspertem E-commerce. Data: {teraz}. Analiza na: {okres}.
     TEMAT: {temat}. {skupienie}
     
     ZASADY: 
-    1. Zero HTML. Używaj Markdown.
+    1. Zero HTML. Używaj Markdown (tu akurat potrzebujemy pogrubień dla czytelności listy).
     2. Format ma być idealnie czytelny jak lista zadań.
     
-    STRUKTURA RAPORTU (Trzymaj się jej sztywno):
+    STRUKTURA RAPORTU:
     Dla każdego z 5 produktów wypisz:
     
     **[PEŁNA NAZWA PRODUKTU]**
     • 💰 Cena: [zakres cenowy PLN]
-    • 🗓️ Start wystawiania: [Konkretna data, np. 01.02.2026]
-    • 📈 PEAK Sprzedaży: [Zakres dat, np. 10-20.02.2026]
-    • 💡 Dlaczego teraz: [Krótkie uzasadnienie jednym zdaniem]
+    • 🗓️ Start wystawiania: [Konkretna data]
+    • 📈 PEAK Sprzedaży: [Zakres dat]
+    • 💡 Dlaczego teraz: [Krótkie uzasadnienie]
     
     Na końcu dodaj sekcję: ⚠️ CZEGO UNIKAĆ (krótko).
     """
@@ -67,10 +67,45 @@ async def pobierz_analize_live(okres, kategoria):
         return f"Błąd AI: {str(e)}"
 
 async def generuj_opis_gpsr(produkt):
+    # NOWY PROMPT - wymusza styl "surowy" zgodny z Twoim wzorem
+    prompt = f"""
+    Napisz profesjonalny tekst GPSR (General Product Safety Regulation) dla produktu: {produkt}.
+    
+    BARDZO WAŻNE ZASADY FORMATOWANIA:
+    1. NIE używaj żadnego Markdowna (żadnych pogrubień **, żadnych kratek #, żadnych tabel).
+    2. Tekst ma być czysty, prosty i gotowy do wklejenia.
+    3. Zachowaj numerację 1., 2., 3. i nazwy sekcji dokładnie jak we wzorze poniżej.
+
+    WZÓR (Tak ma wyglądać wynik końcowy):
+    GPSR – [NAZWA PRODUKTU DUŻYMI LITERAMI]
+
+    1. Bezpieczeństwo
+    Główne zagrożenia
+    [Tu wymień konkretne zagrożenia dla tego produktu w myślnikach lub akapitach]
+    Zasady bezpiecznego użytkowania
+    [Tu konkretne zasady użytkowania]
+    Materiały i zgodność
+    Produkt wykonany z materiałów bezpiecznych dla użytkownika i zgodnych z normami UE.
+
+    2. Dzieci
+    Zastosowanie
+    [Dla jakiego wieku jest ten produkt]
+    Zasady bezpieczeństwa dla dzieci
+    [Czy wymagany nadzór dorosłych, ostrzeżenia o małych elementach itp.]
+
+    3. Utylizacja
+    Postępowanie z zużytym produktem
+    [Jak wyrzucić/segregować ten konkretny produkt]
+    Rekomendacje dla konsumenta
+    W razie wątpliwości sprawdzić lokalne zasady segregacji odpadów.
+    """
+    
     try:
+        # Używamy claude-3-5-sonnet, bo jest najlepszy do trzymania formatu
         msg = await claude_client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=2000,
-            messages=[{"role": "user", "content": f"GPSR dla: {produkt}. Sekcje: Bezpieczeństwo, Dzieci, Utylizacja."}]
+            model="claude-3-5-sonnet-20240620", 
+            max_tokens=2500,
+            messages=[{"role": "user", "content": prompt}]
         )
         return msg.content[0].text
     except Exception as e: return f"Błąd: {e}"
@@ -81,19 +116,20 @@ async def on_ready():
     print(f"✅ Bot online: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
 
+# Obsługa błędu nieistniejącej komendy (żeby bot nie gasł)
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    raise error
+
 @bot.command()
 async def pomoc(ctx):
-    # Wygląd: Centrum Dowodzenia
-    embed = discord.Embed(
-        title="🛠️ Centrum Dowodzenia",
-        description="Witaj! Wybierz narzędzie:",
-        color=0xff7600
-    )
-    embed.add_field(name="🔥 Hity", value="`!hity [miesiąc]` - Główne okazje na rynku", inline=False)
-    embed.add_field(name="📈 Trendy", value="`!trend` - Głęboka analiza konkretnej kategorii", inline=False)
-    embed.add_field(name="📄 GPSR", value="`!gpsr [nazwa]` - Gotowy tekst prawny do aukcji", inline=False)
-    embed.add_field(name="💰 Marża", value="`!marza [zakup] [sprzedaż]` - Szybki kalkulator zysku", inline=False)
-    embed.set_footer(text="Analizy oparte o Perplexity Pro & Claude 3.5")
+    embed = discord.Embed(title="🛠️ Menu", color=0xff9900)
+    embed.add_field(name="🔥 !hity", value="Najlepsze okazje", inline=False)
+    embed.add_field(name="📈 !trend", value="Analiza kategorii", inline=False)
+    embed.add_field(name="💰 !marza", value="Kalkulator cen", inline=False)
+    embed.add_field(name="📄 !gpsr [produkt]", value="Tekst prawny (czysty tekst)", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -106,7 +142,7 @@ async def hity(ctx, *, okres: str = None):
         except asyncio.TimeoutError:
             return await ctx.send("⏰ Czas minął.")
 
-    msg = await ctx.send(f"⏳ **Szukam ogólnych hitów na: {okres}...**")
+    msg = await ctx.send(f"⏳ **Szukam hitów na: {okres}...**")
     raport = await pobierz_analize_live(okres, "Wszystko")
     if len(raport) > 4000: raport = raport[:4000] + "..."
     
@@ -118,14 +154,14 @@ async def trend(ctx, *, okres: str = None):
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
     
     if not okres:
-        await ctx.send("📅 O jaki miesiąc lub okres pytasz? (np. *Luty*):")
+        await ctx.send("📅 Jaki okres analizujemy? (np. *Luty*):")
         try:
             okres_msg = await bot.wait_for('message', check=check, timeout=30)
             okres = okres_msg.content
         except asyncio.TimeoutError:
             return await ctx.send("⏰ Czas minął.")
 
-    await ctx.send(f"📂 Jaka kategoria Cię interesuje? (np. *Dom i Ogród*, *Elektronika*):")
+    await ctx.send(f"📂 Ok, okres: **{okres}**. Teraz podaj kategorię (np. *Ogród*):")
     try:
         kat_msg = await bot.wait_for('message', check=check, timeout=30)
         kategoria = kat_msg.content
@@ -136,7 +172,7 @@ async def trend(ctx, *, okres: str = None):
     raport = await pobierz_analize_live(okres, kategoria)
     if len(raport) > 4000: raport = raport[:4000] + "..."
 
-    embed = discord.Embed(title=f"📈 Raport: {kategoria} ({okres})", description=raport, color=0x2ecc71)
+    embed = discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x2ecc71)
     await status.edit(content=None, embed=embed)
 
 @bot.command()
@@ -144,9 +180,11 @@ async def gpsr(ctx, *, produkt: str = None):
     if not produkt:
         await ctx.send("❌ Podaj nazwę produktu!")
         return
-    msg = await ctx.send("⚖️ Piszę GPSR...")
+    msg = await ctx.send("⚖️ Piszę GPSR (wzór tekstowy)...")
     tresc = await generuj_opis_gpsr(produkt)
-    embed = discord.Embed(title=f"📄 GPSR: {produkt}", description=f"```text\n{tresc}\n```", color=0x3498db)
+    
+    # Wyświetlamy jako blok kodu 'text', żeby zachować surowy format bez formatowania Discorda
+    embed = discord.Embed(description=f"```text\n{tresc}\n```", color=0x3498db)
     await msg.edit(content=None, embed=embed)
 
 @bot.command()
@@ -175,8 +213,4 @@ async def marza(ctx, arg1: str = None, arg2: str = None):
 
 if __name__ == "__main__":
     keep_alive()
-    if not TOKEN:
-        print("❌ Brak tokena!")
-    else:
-        bot.run(TOKEN)
-
+    bot.run(TOKEN)
