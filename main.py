@@ -7,7 +7,7 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI 
 from keep_alive import keep_alive 
 
-# --- KONFIGURACJA ---
+# --- KONFIGURACJA (Standardowe nazwy) ---
 TOKEN = os.environ.get("DISCORD_TOKEN")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
@@ -26,7 +26,7 @@ def clean_text(text):
     text = text.replace("<b>", "**").replace("</b>", "**")
     return text.strip()
 
-# --- LOGIKA AI (Raporty jak ze screena) ---
+# --- LOGIKA AI ---
 async def pobierz_analize_live(okres, kategoria):
     teraz = datetime.datetime.now().strftime("%d.%m.%Y")
     
@@ -37,7 +37,7 @@ async def pobierz_analize_live(okres, kategoria):
         temat = f"Kategoria: {kategoria}"
         skupienie = f"Nisza: {kategoria}."
 
-    # PROMPT SKONFIGUROWANY POD TWÓJ FORMAT
+    # PROMPT
     prompt = f"""
     Jesteś Ekspertem E-commerce. Data: {teraz}. Analiza na: {okres}.
     TEMAT: {temat}. {skupienie}
@@ -83,7 +83,7 @@ async def on_ready():
 
 @bot.command()
 async def pomoc(ctx):
-    # PRZYWRÓCONY WYGLĄD "CENTRUM DOWODZENIA"
+    # Wygląd: Centrum Dowodzenia
     embed = discord.Embed(
         title="🛠️ Centrum Dowodzenia",
         description="Witaj! Wybierz narzędzie:",
@@ -98,7 +98,6 @@ async def pomoc(ctx):
 
 @bot.command()
 async def hity(ctx, *, okres: str = None):
-    # Logika: Jeśli brak okresu, zapytaj. Kategoria automatycznie "Wszystko".
     if not okres:
         await ctx.send("📅 Podaj miesiąc (np. *Marzec*):")
         try:
@@ -116,10 +115,8 @@ async def hity(ctx, *, okres: str = None):
 
 @bot.command()
 async def trend(ctx, *, okres: str = None):
-    # Logika: Zawsze pyta o kategorię, bo to research szczegółowy.
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
     
-    # Krok 1: Jeśli user nie podał okresu w komendzie
     if not okres:
         await ctx.send("📅 O jaki miesiąc lub okres pytasz? (np. *Luty*):")
         try:
@@ -128,7 +125,6 @@ async def trend(ctx, *, okres: str = None):
         except asyncio.TimeoutError:
             return await ctx.send("⏰ Czas minął.")
 
-    # Krok 2: Zawsze pytaj o kategorię (kluczowe dla !trend)
     await ctx.send(f"📂 Jaka kategoria Cię interesuje? (np. *Dom i Ogród*, *Elektronika*):")
     try:
         kat_msg = await bot.wait_for('message', check=check, timeout=30)
@@ -163,7 +159,7 @@ async def marza(ctx, arg1: str = None, arg2: str = None):
         
         if arg2 is None:
             embed = discord.Embed(title=f"📊 Kalkulacja (Zakup: {zakup} zł)", color=0x3498db)
-            progi = [20, 30, 40, 50, 60, 70, 100] # PEŁNA LISTA
+            progi = [20, 30, 40, 50, 60, 70, 100] 
             for cel in progi:
                 cena = ((zakup_netto + cel) / 0.97) * 1.23
                 embed.add_field(name=f"+{cel} zł", value=f"**{cena:.2f} zł**", inline=True)
