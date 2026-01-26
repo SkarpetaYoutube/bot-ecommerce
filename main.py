@@ -7,178 +7,161 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI 
 from keep_alive import keep_alive 
 
-# --- KONFIGURACJA (BEZPIECZNA) ---
+# --- KONFIGURACJA ---
 TOKEN = os.environ.get("DISCORD_TOKEN")
 CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
 PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
 
-# --- KLIENCI AI ---
 claude_client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
-perplexity_client = AsyncOpenAI(
-    api_key=PERPLEXITY_API_KEY,
-    base_url="https://api.perplexity.ai"
-)
+perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_API_KEY, base_url="https://api.perplexity.ai")
 
-# Ustawienia bota
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 
 # --- FUNKCJE POMOCNICZE ---
 def clean_text(text):
-    """Czyści tekst z tagów HTML i formatuje go pod Discorda."""
     if not text: return ""
-    # Zamiana tagów HTML na znaki nowej linii lub pogrubienie
     text = text.replace("<br>", "\n").replace("<br/>", "\n").replace("<br />", "\n")
     text = text.replace("<b>", "**").replace("</b>", "**")
     return text.strip()
 
-# --- FUNKCJE AI (LOGIKA) ---
-
+# --- LOGIKA AI ---
 async def pobierz_analize_live(okres, kategoria):
     teraz = datetime.datetime.now().strftime("%d.%m.%Y")
-    
     if kategoria.lower() in ["wszystko", "all", "ogólne", "top", "hity"]:
-        temat_researchu = "OGÓLNE BESTSELLERY RYNKOWE"
-        skupienie = "Przeszukaj cały polski rynek e-commerce."
+        temat = "OGÓLNE BESTSELLERY"
+        skupienie = "Cały polski rynek e-commerce."
     else:
-        temat_researchu = f"Kategoria: {kategoria}"
-        skupienie = f"Skup się wyłącznie na niszy: {kategoria}."
+        temat = f"Kategoria: {kategoria}"
+        skupienie = f"Nisza: {kategoria}."
 
     prompt = f"""
-    Jesteś Ekspertem E-commerce. Dziś jest {teraz}. 
-    Analizowany okres: {okres}.
-    KATEGORIA: {temat_researchu}.
-    {skupienie}
-
-    ZASADY FORMATOWANIA (BARDZO WAŻNE):
-    1. Używaj WYŁĄCZNIE Markdown Discorda.
-    2. NIGDY nie używaj tagów HTML takich jak <br>, <b>, <table>.
-    3. Zamiast tabel, używaj list punktowanych.
+    Jesteś Ekspertem E-commerce. Data: {teraz}. Analiza na: {okres}.
+    TEMAT: {temat}. {skupienie}
     
-    STRUKTURA RAPORTU:
-    Dla każdego z 5-6 produktów napisz:
+    ZASADY: 
+    1. Zero HTML. Używaj Markdown (pogrubienia **, listy •).
+    2. Konkretne produkty z potencjałem zysku.
+    
+    STRUKTURA:
     **[NAZWA PRODUKTU]**
-    • 💰 Cena: [Zakres]
-    • 📅 Okres sprzedaży: [Daty]
-    • 🚀 Potencjał: [Krótki opis dlaczego warto]
-
-    Na końcu dodaj sekcję: ⚠️ CZEGO UNIKAĆ.
+    • 💰 Cena: [zakres]
+    • 🚀 Potencjał: [krótki opis]
+    • ⚠️ Uwaga: [na co uważać]
     """
-
     try:
         response = await perplexity_client.chat.completions.create(
             model="sonar-pro", 
-            messages=[
-                {"role": "system", "content": "Jesteś analitykiem e-commerce. Pisz konkretnie, unikaj HTML, używaj list punktowanych."},
-                {"role": "user", "content": prompt},
-            ]
+            messages=[{"role": "user", "content": prompt}]
         )
         return clean_text(response.choices[0].message.content)
     except Exception as e:
-        return f"Błąd Perplexity: {str(e)}"
+        return f"Błąd AI: {str(e)}"
 
 async def generuj_opis_gpsr(produkt):
-    prompt = f"Stwórz tekst GPSR dla: {produkt}. Styl urzędowy, sekcje: Bezpieczeństwo, Dzieci, Utylizacja. Czysty tekst bez HTML."
     try:
-        message = await claude_client.messages.create(
-            model="claude-3-5-sonnet-20240620", 
-            max_tokens=4000,
-            temperature=0.3, 
-            messages=[{"role": "user", "content": prompt}]
+        msg = await claude_client.messages.create(
+            model="claude-3-5-sonnet-20240620", max_tokens=2000,
+            messages=[{"role": "user", "content": f"GPSR dla: {produkt}. Sekcje: Bezpieczeństwo, Dzieci, Utylizacja."}]
         )
-        return message.content[0].text
-    except Exception as e:
-        return f"Błąd API: {str(e)}"
+        return msg.content[0].text
+    except Exception as e: return f"Błąd: {e}"
 
-# --- KOMENDY BOTA ---
-
+# --- KOMENDY ---
 @bot.event
 async def on_ready():
-    print(f"✅ Bot online! Zalogowano jako: {bot.user}")
-    await bot.change_presence(activity=discord.Game(name="!pomoc | Analiza Rynku"))
+    print(f"✅ Bot online: {bot.user}")
+    await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
 
 @bot.command()
 async def pomoc(ctx):
-    embed = discord.Embed(title="🛠️ Centrum Dowodzenia", description="Witaj! Wybierz narzędzie:", color=0xff9900)
-    embed.add_field(name="🔥 Hity", value="`!hity [miesiąc]` - Główne okazje", inline=False)
-    embed.add_field(name="📈 Trendy", value="`!trend` - Raport kategorii", inline=False)
-    embed.add_field(name="📄 GPSR", value="`!gpsr [nazwa]` - Tekst prawny", inline=False)
-    embed.add_field(name="💰 Marża", value="`!marza [zakup] [sprzedaż]`", inline=False)
-    embed.set_footer(text="Analizy oparte o Perplexity Pro & Claude 3.5")
+    embed = discord.Embed(title="🛠️ Menu", color=0xff9900)
+    embed.add_field(name="🔥 !hity", value="Najlepsze okazje", inline=False)
+    embed.add_field(name="📈 !trend", value="Analiza kategorii", inline=False)
+    embed.add_field(name="💰 !marza [zakup]", value="Kalkulator cen", inline=False)
+    embed.add_field(name="📄 !gpsr [produkt]", value="Tekst prawny", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
 async def hity(ctx, *, okres: str = None):
+    # POPRAWKA: Jeśli brak okresu, zapytaj o niego
     if not okres:
-        await ctx.send("📅 Podaj miesiąc! Np. `!hity Marzec`")
-        return
-    msg = await ctx.send(f"⏳ **Analizuję rynek pod kątem okazji na {okres}...**")
+        await ctx.send("📅 Podaj miesiąc (np. *Marzec*):")
+        try:
+            msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30)
+            okres = msg.content
+        except asyncio.TimeoutError:
+            return await ctx.send("⏰ Czas minął.")
+
+    msg = await ctx.send(f"⏳ **Szukam hitów na: {okres}...**")
     raport = await pobierz_analize_live(okres, "Wszystko")
+    if len(raport) > 4000: raport = raport[:4000] + "..."
     
-    embed = discord.Embed(title=f"🏆 Złote Strzały: {okres}", description=raport, color=0xe74c3c)
+    embed = discord.Embed(title=f"🏆 Hity: {okres}", description=raport, color=0xe74c3c)
     await msg.edit(content=None, embed=embed)
 
 @bot.command()
 async def trend(ctx, *, okres: str = None):
-    if not okres:
-        await ctx.send("📅 Podaj miesiąc/okres.")
-        return
-    
-    await ctx.send("📂 Podaj kategorię (np. *Dom i Ogród* lub *Elektronika*):")
+    # POPRAWKA: Interaktywne dopytywanie
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
-    try:
-        kategoria_msg = await bot.wait_for('message', check=check, timeout=30)
-        kategoria = kategoria_msg.content
-    except: kategoria = "Wszystko"
-
-    status_msg = await ctx.send(f"🔍 **Głęboki research dla: {kategoria}...**")
-    raport = await pobierz_analize_live(okres, kategoria)
     
-    embed = discord.Embed(title=f"📈 Raport: {kategoria} ({okres})", description=raport, color=0x2ecc71)
-    await status_msg.edit(content=None, embed=embed)
+    if not okres:
+        await ctx.send("📅 Jaki okres analizujemy? (np. *Luty*):")
+        try:
+            okres_msg = await bot.wait_for('message', check=check, timeout=30)
+            okres = okres_msg.content
+        except asyncio.TimeoutError:
+            return await ctx.send("⏰ Czas minął.")
+
+    await ctx.send(f"📂 Ok, okres: **{okres}**. Teraz podaj kategorię (np. *Ogród*):")
+    try:
+        kat_msg = await bot.wait_for('message', check=check, timeout=30)
+        kategoria = kat_msg.content
+    except asyncio.TimeoutError:
+        return await ctx.send("⏰ Czas minął.")
+
+    status = await ctx.send(f"🔍 **Analizuję: {kategoria} ({okres})...**")
+    raport = await pobierz_analize_live(okres, kategoria)
+    if len(raport) > 4000: raport = raport[:4000] + "..."
+
+    embed = discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x2ecc71)
+    await status.edit(content=None, embed=embed)
 
 @bot.command()
 async def gpsr(ctx, *, produkt: str = None):
     if not produkt:
-        await ctx.send("❌ Podaj nazwę produktu.")
+        await ctx.send("❌ Podaj nazwę produktu!")
         return
-    msg = await ctx.send("⚖️ Generuję dokumentację GPSR...")
+    msg = await ctx.send("⚖️ Piszę GPSR...")
     tresc = await generuj_opis_gpsr(produkt)
-    embed = discord.Embed(title=f"📄 GPSR: {produkt}", color=0x3498db, description=f"```text\n{tresc}\n```")
-    embed.set_footer(text="Skopiuj tekst z powyższej ramki.")
+    embed = discord.Embed(title=f"📄 GPSR: {produkt}", description=f"```text\n{tresc}\n```", color=0x3498db)
     await msg.edit(content=None, embed=embed)
 
 @bot.command()
 async def marza(ctx, arg1: str = None, arg2: str = None):
     if not arg1:
-        await ctx.send("❌ Użycie: `!marza [zakup]` lub `!marza [zakup] [sprzedaż]`")
-        return
+        return await ctx.send("❌ Wpisz cenę zakupu, np. `!marza 100`")
     try:
         zakup = float(arg1.replace(',', '.'))
         zakup_netto = zakup / 1.23
         
         if arg2 is None:
-            embed = discord.Embed(title=f"📊 Kalkulacja dla zakupu: {zakup} zł", color=0x3498db)
-            for cel in [20, 50, 100]:
+            embed = discord.Embed(title=f"📊 Kalkulacja (Zakup: {zakup} zł)", color=0x3498db)
+            progi = [20, 30, 40, 50, 60, 70, 100] # Twoje progi
+            for cel in progi:
                 cena = ((zakup_netto + cel) / 0.97) * 1.23
-                embed.add_field(name=f"Zysk +{cel}zł", value=f"Cena: **{cena:.2f} zł**", inline=True)
+                embed.add_field(name=f"+{cel} zł", value=f"**{cena:.2f} zł**", inline=True)
+            embed.set_footer(text="Ceny brutto (z VAT i prowizją).")
             await ctx.send(embed=embed)
         else:
             sprzedaz = float(arg2.replace(',', '.'))
-            sprzedaz_netto = sprzedaz / 1.23
-            zysk = (sprzedaz_netto * 0.97) - zakup_netto
-            embed = discord.Embed(title="💵 Wynik finansowy", color=0x2ecc71 if zysk > 0 else 0xe74c3c)
-            embed.add_field(name="Zysk na rękę", value=f"**{zysk:.2f} zł**", inline=False)
-            embed.set_footer(text="VAT 23% | Ryczałt 3%. Nie uwzględnia prowizji Allegro.")
+            zysk = (sprzedaz / 1.23 * 0.97) - zakup_netto
+            embed = discord.Embed(title="Wynik", color=0x2ecc71 if zysk > 0 else 0xe74c3c)
+            embed.add_field(name="Zysk na rękę", value=f"**{zysk:.2f} zł**")
             await ctx.send(embed=embed)
-    except:
-        await ctx.send("❌ Wpisz poprawne liczby.")
+    except: await ctx.send("❌ Błąd liczb.")
 
-# --- URUCHAMIANIE ---
 if __name__ == "__main__":
     keep_alive()
-    if not TOKEN:
-        print("❌ BŁĄD: Brak DISCORD_TOKEN!")
-    else:
-        bot.run(TOKEN)
+    bot.run(TOKEN)
