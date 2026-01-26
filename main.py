@@ -69,7 +69,7 @@ async def pobierz_analize_live(okres, kategoria):
 async def generuj_opis_gpsr(produkt):
     try:
         msg = await claude_client.messages.create(
-            model="claude-3-5-sonnet-20240620", max_tokens=2000,
+            model="claude-haiku-4-5-20251001", max_tokens=2000,
             messages=[{"role": "user", "content": f"GPSR dla: {produkt}. Sekcje: Bezpieczeństwo, Dzieci, Utylizacja."}]
         )
         return msg.content[0].text
@@ -179,3 +179,4 @@ if __name__ == "__main__":
         print("❌ Brak tokena!")
     else:
         bot.run(TOKEN)
+
