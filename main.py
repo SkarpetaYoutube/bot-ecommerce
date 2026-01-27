@@ -255,7 +255,8 @@ async def pomoc(ctx):
     embed = discord.Embed(title="🛠️ Menu Bota", color=0xff9900)
     embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`", inline=False)
     embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg` (Symulacja)", inline=False)
-    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup] [prowizja]`\n`!marza [zakup] [sprzedaz] [prowizja]`\n`!trend`\n`!gpsr`", inline=False)
+    # ZAKTUALIZOWANA POMOC
+    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup] [sprzedaz]`\n`!trend`\n`!gpsr`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -308,104 +309,59 @@ async def allegro_kod(ctx, code: str = None):
     else:
         await msg.edit(content="❌ Błąd logowania.")
 
-# --- NAPRAWIONA LOGIKA MARŻY ---
-
+# --- ZAKTUALIZOWANA FUNKCJA MARŻY (BEZ PROWIZJI) ---
 @bot.command()
-async def marza(ctx, arg1: str = None, arg2: str = None, arg3: str = None):
+async def marza(ctx, arg1: str = None, arg2: str = None):
     """
-    Kalkulator marży (VAT 23% + Ryczałt 3%).
-    Wersja poprawiona - obsługuje przecinki i błędy formatowania.
+    Kalkulator Zysku dla FIRMY (VAT 23% + Ryczałt 3%).
+    Bez prowizji Allegro (zgodnie z prośbą).
+    Użycie: !marza [cena_zakupu] [cena_sprzedazy]
     """
     await ctx.message.delete()
+    
+    # Jeśli brakuje argumentów, wyświetl błąd
     if not arg1 or not arg2:
-        return await ctx.send("❌ Użyj: `!marza [zakup] [prowizja]` LUB `!marza [zakup] [sprzedaz] [prowizja]`")
+        return await ctx.send("❌ Użyj: `!marza [zakup] [sprzedaz]` (Ceny brutto)")
     
     try:
-        # Parsowanie danych wejściowych
+        # Parsowanie liczb (zamiana , na .)
         zakup_brutto = parsuj_liczbe(arg1)
+        sprzedaz_brutto = parsuj_liczbe(arg2)
+        
+        # 1. Obliczenie Netto (odliczenie VAT 23%)
         zakup_netto = zakup_brutto / 1.23
+        sprzedaz_netto = sprzedaz_brutto / 1.23
         
-        # Sprawdzamy, czy to tryb tabeli (2 argumenty) czy pełny (3 argumenty)
-        is_table_mode = (arg3 is None)
+        # 2. Obliczenie Ryczałtu (3% od przychodu netto)
+        ryczalt = sprzedaz_netto * 0.03
         
-        if is_table_mode:
-            # ARG2 to Prowizja
-            raw_prowizja = parsuj_liczbe(arg2)
-            
-            # Zabezpieczenie: jeśli ktoś wpisze 50 (jako 50%), to OK. Jeśli 0.5 (jako 50%), też OK.
-            if raw_prowizja > 1:
-                prowizja_proc = raw_prowizja / 100.0
-            else:
-                prowizja_proc = raw_prowizja
-
-            # Zabezpieczenie przed absurdem (np. 144%)
-            if prowizja_proc > 0.50:
-                return await ctx.send(f"⚠️ **Błąd:** Prowizja {prowizja_proc*100:.1f}% wydaje się za duża. Sprawdź, czy nie wpisałeś ceny w złe miejsce.")
-
-            embed = discord.Embed(title=f"📊 Kalkulacja (VAT + Ryczałt 3%)", color=0x3498db)
-            embed.description = f"Zakup: **{zakup_brutto} zł**. Prowizja: **{prowizja_proc*100:.1f}%**"
-            
-            for cel in [10, 20, 30, 50, 100]:
-                # Wzór: Cena Brutto = (Zysk_Cel * 1.23 + Zakup_Brutto) / (0.97 - Prowizja)
-                mianownik = 0.97 - prowizja_proc
-                
-                if mianownik <= 0:
-                    cena_brutto = 999999 # Zabezpieczenie
-                    warn = "(Prowizja zjada cały zysk!)"
-                else:
-                    cena_brutto = (cel * 1.23 + zakup_brutto) / mianownik
-                    warn = ""
-
-                if warn:
-                    val = f"⚠️ Nieopłacalne {warn}"
-                else:
-                    val = f"Sprzedaj za: **{cena_brutto:.2f} zł**"
-                
-                embed.add_field(name=f"Zysk {cel} zł", value=val, inline=True)
-            
-            embed.set_footer(text="Ceny uwzględniają: VAT 23% (odliczony), Prowizję i Ryczałt 3%.")
-            await ctx.send(embed=embed)
-            
-        else:
-            # ARG2 to Sprzedaż, ARG3 to Prowizja
-            sprzedaz_brutto = parsuj_liczbe(arg2)
-            raw_prowizja = parsuj_liczbe(arg3)
-            
-            if raw_prowizja > 1:
-                prowizja_proc = raw_prowizja / 100.0
-            else:
-                prowizja_proc = raw_prowizja
-
-            sprzedaz_netto = sprzedaz_brutto / 1.23
-            
-            # Koszty
-            prowizja_allegro_netto = (sprzedaz_brutto * prowizja_proc) / 1.23
-            ryczalt = sprzedaz_netto * 0.03 # Ryczałt 3%
-            
-            zysk_na_czysto = sprzedaz_netto - zakup_netto - prowizja_allegro_netto - ryczalt
-            
-            kolor = 0x2ecc71 if zysk_na_czysto > 0 else 0xe74c3c
-            
-            embed = discord.Embed(title="Wynik Transakcji", color=kolor)
-            embed.add_field(name="1. Zakup", value=f"{zakup_brutto:.2f} zł", inline=True)
-            embed.add_field(name="2. Sprzedaż", value=f"{sprzedaz_brutto:.2f} zł", inline=True)
-            embed.add_field(name="3. Prowizja", value=f"{prowizja_proc*100:.1f}%", inline=True)
-            
-            embed.add_field(name="---", value="---", inline=False)
-            
-            details = (
-                f"Zakup Netto: {zakup_netto:.2f} zł\n"
-                f"Sprzedaż Netto: {sprzedaz_netto:.2f} zł\n"
-                f"Koszt Allegro (netto): -{prowizja_allegro_netto:.2f} zł\n"
-                f"Podatek Ryczałt (3%): -{ryczalt:.2f} zł"
-            )
-            embed.add_field(name="Szczegóły", value=details, inline=False)
-            embed.add_field(name="ZYSK NA CZYSTO", value=f"💰 **{zysk_na_czysto:.2f} zł**", inline=False)
-            
-            await ctx.send(embed=embed)
+        # 3. Zysk na czysto (bez prowizji Allegro)
+        zysk_na_czysto = sprzedaz_netto - zakup_netto - ryczalt
+        
+        # Kolory: Zielony jak zarabiasz, Czerwony jak tracisz
+        kolor = 0x2ecc71 if zysk_na_czysto > 0 else 0xe74c3c
+        
+        embed = discord.Embed(title="📊 Wynik (Firma VAT + Ryczałt)", color=kolor)
+        embed.add_field(name="Zakup (Brutto)", value=f"{zakup_brutto:.2f} zł", inline=True)
+        embed.add_field(name="Sprzedaż (Brutto)", value=f"{sprzedaz_brutto:.2f} zł", inline=True)
+        
+        # Pusta linia dla estetyki
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+        
+        details = (
+            f"💰 Sprzedaż Netto: {sprzedaz_netto:.2f} zł\n"
+            f"🛒 Zakup Netto: -{zakup_netto:.2f} zł\n"
+            f"🏛️ Podatek Ryczałt (3%): -{ryczalt:.2f} zł\n"
+            f"⚠️ *Prowizja Allegro: Nie wliczona*"
+        )
+        
+        embed.add_field(name="Rozliczenie", value=details, inline=False)
+        embed.add_field(name="ZYSK NA CZYSTO", value=f"💸 **{zysk_na_czysto:.2f} zł**", inline=False)
+        
+        await ctx.send(embed=embed)
 
     except Exception as e:
-        await ctx.send(f"❌ Coś poszło nie tak: {e}\nSpróbuj: `!marza 100 15` (dla 15% prowizji)")
+        await ctx.send(f"❌ Błąd: {e}. Upewnij się, że wpisujesz liczby, np. `!marza 50 100`")
 
 # --- RESZTA KOMEND ---
 
