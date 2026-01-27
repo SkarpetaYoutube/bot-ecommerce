@@ -21,8 +21,12 @@ ALLEGRO_CLIENT_ID = os.environ.get("ALLEGRO_CLIENT_ID")
 ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
-# --- ID KANAŁU ---
-TARGET_CHANNEL_ID = 1464959293681045658
+# --- ID KANAŁÓW (TUTAJ ROZDZIELILIŚMY KANAŁY) ---
+# 1. Kanał dla ZAMÓWIEŃ (pozostawiam Twój stary numer)
+KANAL_ZAMOWIENIA_ID = 1464959293681045658 
+
+# 2. Kanał dla WIADOMOŚCI (TU WKLEJ ID KANAŁU #wiadomosci-klienci)
+KANAL_WIADOMOSCI_ID = 1465688093808922728  # <--- ZMIEŃ TE ZERA NA ID KANAŁU WIADOMOŚCI!
 
 # TREŚĆ AUTOMATYCZNEJ ODPOWIEDZI
 AUTO_REPLY_MSG = (
@@ -152,7 +156,8 @@ async def allegro_responder():
                 
                 if author_role == "BUYER":
                     if tryb_testowy:
-                        channel = bot.get_channel(TARGET_CHANNEL_ID)
+                        # TUTAJ UŻYWAMY KANAŁU WIADOMOŚCI
+                        channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
                         if channel:
                             embed = discord.Embed(title="🛡️ AUTO-RESPONDER (TEST)", color=0x3498db)
                             embed.description = f"Klient napisał: *{last_msg['text']}*\n\n**W trybie LIVE bot odpisałby:**\n{AUTO_REPLY_MSG}"
@@ -165,7 +170,8 @@ async def allegro_responder():
                         if sukces:
                             print(f"✅ Odpisano automatycznie do wątku {thread_id}")
                             await oznacz_jako_przeczytane(thread_id, last_msg["id"])
-                            channel = bot.get_channel(TARGET_CHANNEL_ID)
+                            # TUTAJ UŻYWAMY KANAŁU WIADOMOŚCI
+                            channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
                             if channel:
                                 await channel.send(f"🤖 **Auto-Reply wysłane!** Odpisałem klientowi na wiadomość.")
                         else:
@@ -202,7 +208,9 @@ async def allegro_monitor():
                 produkty_tekst = ""
                 for item in order["lineItems"]:
                     produkty_tekst += f"• {item['quantity']}x **{item['offer']['name']}**\n"
-                channel = bot.get_channel(TARGET_CHANNEL_ID)
+                
+                # TUTAJ UŻYWAMY KANAŁU ZAMÓWIEŃ
+                channel = bot.get_channel(KANAL_ZAMOWIENIA_ID)
                 if channel:
                     embed = discord.Embed(title="💰 NOWE ZAMÓWIENIE!", color=0xf1c40f)
                     embed.add_field(name="Kupujący", value=kupujacy, inline=True)
@@ -301,9 +309,6 @@ async def allegro_kod(ctx, code: str = None):
     else:
         await msg.edit(content="❌ Błąd logowania.")
 
-# --- NAPRAWIONA FUNKCJA MARŻY ---
-# --- NAPRAWIONA FUNKCJA MARŻY (WERSJA FINALNA) ---
-# --- NAPRAWIONA FUNKCJA MARŻY (WERSJA FINALNA) ---
 @bot.command()
 async def marza(ctx, *args):
     """
@@ -330,11 +335,8 @@ async def marza(ctx, *args):
             
             tekst_sugestii = ""
             for cel in cele_zysku:
-                # Wzór: Zysk = SprzedażNetto * 0.97 - ZakupNetto
-                # SprzedażNetto = (Zysk + ZakupNetto) / 0.97
                 sprzedaz_netto_wymagana = (cel + zakup_netto) / 0.97
                 sprzedaz_brutto_wymagana = sprzedaz_netto_wymagana * 1.23
-                
                 tekst_sugestii += f"Zysk **{cel} zł** → Sprzedaj za: **{sprzedaz_brutto_wymagana:.2f} zł**\n"
             
             embed.add_field(name="Kalkulacja (VAT 23% + Ryczałt 3%)", value=tekst_sugestii, inline=False)
@@ -343,22 +345,18 @@ async def marza(ctx, *args):
         # --- OPCJA 2: ZAKUP + SPRZEDAŻ (+ opcjonalna PROWIZJA) ---
         elif len(args) >= 2:
             sprzedaz_brutto = parsuj_liczbe(args[1])
-            
-            # Jeśli podano 3 argument, to jest to prowizja %
             prowizja_procent = parsuj_liczbe(args[2]) if len(args) > 2 else 0.0
             
             # Obliczenia
             sprzedaz_netto = sprzedaz_brutto / 1.23
             
             # Koszty
-            prowizja_kwota = sprzedaz_brutto * (prowizja_procent / 100) # Allegro liczy prowizję od brutto
-            ryczalt = sprzedaz_netto * 0.03 # Ryczałt 3% od przychodu netto
+            prowizja_kwota = sprzedaz_brutto * (prowizja_procent / 100)
+            ryczalt = sprzedaz_netto * 0.03
             
-            # Zysk na czysto = Netto ze sprzedaży - Netto z zakupu - Ryczałt - Prowizja
-            # NAPRAWIONO LITERÓWKĘ: zmieniono 'ryczałt' na 'ryczalt'
+            # Zysk na czysto
             zysk = sprzedaz_netto - zakup_netto - ryczalt - prowizja_kwota
             
-            # Kolory i Emoji
             if zysk > 0:
                 kolor = 0x2ecc71 # Zielony
                 emoji = "✅"
@@ -367,7 +365,6 @@ async def marza(ctx, *args):
                 emoji = "⚠️"
 
             embed = discord.Embed(title=f"{emoji} Wynik Transakcji", color=kolor)
-            
             embed.add_field(name="1. Ceny", value=f"Zakup: **{zakup_brutto:.2f} zł**\nSprzedaż: **{sprzedaz_brutto:.2f} zł**", inline=False)
             
             koszty_txt = (
@@ -377,7 +374,6 @@ async def marza(ctx, *args):
                 f"• VAT (23%): wliczony w netto"
             )
             embed.add_field(name="2. Koszty i Podatki", value=koszty_txt, inline=False)
-            
             embed.add_field(name="3. ZYSK NA RĘKĘ", value=f"💰 **{zysk:.2f} zł**", inline=False)
             
             if prowizja_procent == 0:
@@ -404,7 +400,8 @@ async def trend(ctx, *, kategoria: str = None):
 @bot.command()
 async def test_allegro(ctx):
     await ctx.message.delete()
-    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    # TUTAJ UŻYWAMY KANAŁU ZAMÓWIEŃ
+    channel = bot.get_channel(KANAL_ZAMOWIENIA_ID)
     if channel:
         embed = discord.Embed(title="💰 TEST ZAMÓWIENIA", color=0xf1c40f)
         embed.add_field(name="Kupujący", value="TestUser123", inline=True)
@@ -413,19 +410,20 @@ async def test_allegro(ctx):
         embed.set_footer(text=f"ID: TEST-12345 | {polski_czas()}")
         await channel.send(content="@here Test! 💸", embed=embed)
     else:
-        await ctx.send(f"❌ Błąd kanału ID: {TARGET_CHANNEL_ID}")
+        await ctx.send(f"❌ Błąd kanału ID: {KANAL_ZAMOWIENIA_ID}")
 
 @bot.command()
 async def test_msg(ctx):
     await ctx.message.delete()
-    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    # TUTAJ UŻYWAMY KANAŁU WIADOMOŚCI
+    channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
     if channel:
         embed = discord.Embed(title="🛡️ AUTO-RESPONDER (SYMULACJA)", color=0x3498db)
         embed.description = f"Klient napisał: *Dzień dobry, kiedy wyślecie paczkę?*\n\n**W trybie LIVE bot odpisałby:**\n{AUTO_REPLY_MSG}"
         embed.set_footer(text="To jest tylko test wyglądu.")
         await channel.send(embed=embed)
     else:
-        await ctx.send("❌ Błąd kanału.")
+        await ctx.send("❌ Błąd kanału. Sprawdź czy podałeś dobre ID wiadomości.")
 
 @bot.command()
 async def hity(ctx, *, okres: str = None):
@@ -468,5 +466,3 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except Exception as e:
         print(f"❌ START ERROR: {e}")
-
-
