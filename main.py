@@ -303,6 +303,7 @@ async def allegro_kod(ctx, code: str = None):
 
 # --- NAPRAWIONA FUNKCJA MARŻY ---
 # --- NAPRAWIONA FUNKCJA MARŻY (WERSJA FINALNA) ---
+# --- NAPRAWIONA FUNKCJA MARŻY (WERSJA FINALNA) ---
 @bot.command()
 async def marza(ctx, *args):
     """
@@ -352,11 +353,10 @@ async def marza(ctx, *args):
             # Koszty
             prowizja_kwota = sprzedaz_brutto * (prowizja_procent / 100) # Allegro liczy prowizję od brutto
             ryczalt = sprzedaz_netto * 0.03 # Ryczałt 3% od przychodu netto
-            podatki_suma = ryczalt + (sprzedaz_netto * 0.23 - zakup_netto * 0.23) # VAT do wpłaty (uproszczone)
             
             # Zysk na czysto = Netto ze sprzedaży - Netto z zakupu - Ryczałt - Prowizja
-            # (Matematycznie równoważne: Zostaje nam brutto, płacimy VAT do US, ryczałt i prowizję)
-            zysk = sprzedaz_netto - zakup_netto - ryczałt - prowizja_kwota
+            # NAPRAWIONO LITERÓWKĘ: zmieniono 'ryczałt' na 'ryczalt'
+            zysk = sprzedaz_netto - zakup_netto - ryczalt - prowizja_kwota
             
             # Kolory i Emoji
             if zysk > 0:
@@ -468,4 +468,5 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except Exception as e:
         print(f"❌ START ERROR: {e}")
+
 
