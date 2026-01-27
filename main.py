@@ -155,10 +155,6 @@ async def allegro_responder():
                             embed.description = f"Klient napisał: *{last_msg['text']}*\n\n**W trybie LIVE bot odpisałby:**\n{AUTO_REPLY_MSG}"
                             embed.set_footer(text="Wpisz !tryb_live aby włączyć wysyłanie.")
                             await channel.send(embed=embed)
-                        
-                        # Oznaczamy jako przeczytane w systemie bota (żeby nie spamował na DC), ale nie na Allegro
-                        # W trybie testowym to trudne, bo nie chcemy ingerować w Allegro.
-                        # Dlatego w trybie testowym bot może powtórzyć powiadomienie na DC co 3 minuty, dopóki sam nie odpiszesz.
                         pass 
                     
                     else:
@@ -253,12 +249,11 @@ async def pomoc(ctx):
     embed = discord.Embed(title="🛠️ Menu Bota", color=0xff9900)
     embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`", inline=False)
     embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg` (Symulacja)", inline=False)
-    embed.add_field(name="🧠 Narzędzia", value="`!marza` - Kalkulator\n`!trend` - Badanie rynku\n`!gpsr` - Teksty prawne", inline=False)
+    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup] [prowizja]` - Wylicz ceny\n`!marza [zakup] [sprzedaz] [prowizja]` - Sprawdź zysk\n`!trend` - Badanie rynku\n`!gpsr` - Teksty prawne", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
 async def auto_start(ctx):
-    """Włącza pętlę respondera"""
     await ctx.message.delete()
     global responder_active
     responder_active = True
@@ -267,7 +262,6 @@ async def auto_start(ctx):
 
 @bot.command()
 async def auto_stop(ctx):
-    """Wyłącza respondera"""
     await ctx.message.delete()
     global responder_active
     responder_active = False
@@ -275,7 +269,6 @@ async def auto_stop(ctx):
 
 @bot.command()
 async def tryb_live(ctx):
-    """Włącza prawdziwe wysyłanie wiadomości"""
     await ctx.message.delete()
     global tryb_testowy
     tryb_testowy = False
@@ -283,7 +276,6 @@ async def tryb_live(ctx):
 
 @bot.command()
 async def tryb_test(ctx):
-    """Włącza tryb bezpieczny"""
     await ctx.message.delete()
     global tryb_testowy
     tryb_testowy = True
@@ -310,46 +302,92 @@ async def allegro_kod(ctx, code: str = None):
     else:
         await msg.edit(content="❌ Błąd logowania.")
 
-# --- PRZYWRÓCONE KOMENDY (MARŻA, TREND, TESTY) ---
+# --- NOWA LOGIKA MARŻY (VAT 23% + Ryczałt 3%) ---
 
 @bot.command()
-async def marza(ctx, arg1: str = None, arg2: str = None):
-    """Kalkulator marży"""
+async def marza(ctx, arg1: str = None, arg2: str = None, arg3: str = None):
+    """
+    Kalkulator marży dla VAT-owca na ryczałcie 3%.
+    Użycie:
+    1. !marza [zakup] [prowizja_%] -> Pokaże tabelę cen.
+    2. !marza [zakup] [sprzedaz] [prowizja_%] -> Obliczy dokładny zysk.
+    """
     await ctx.message.delete()
-    if not arg1: return await ctx.send("❌ Wpisz cenę zakupu, np: `!marza 50`")
+    if not arg1 or not arg2:
+        return await ctx.send("❌ Błąd. Użyj: `!marza [zakup] [prowizja]` LUB `!marza [zakup] [sprzedaz] [prowizja]`")
+    
     try:
-        zakup = float(arg1.replace(',', '.'))
-        zakup_netto = zakup / 1.23
-        if arg2 is None:
-            # Wariant 1: Mam cenę zakupu, pokaż za ile sprzedać
-            embed = discord.Embed(title=f"📊 Zakup: {zakup} zł brutto", color=0x3498db)
-            embed.description = "Sugerowane ceny sprzedaży (dla zysku na rękę):"
-            for cel in [10, 20, 30, 50, 100]:
-                # Wzór: (Zakup_Netto + Zysk) / (1 - Prowizja_Allegro) * VAT
-                # Zakładamy średnią prowizję 13% (0.87)
-                cena = ((zakup_netto + cel) / 0.87) * 1.23
-                embed.add_field(name=f"Zysk {cel} zł", value=f"Sprzedaj za: **{cena:.2f} zł**", inline=True)
-            await ctx.send(embed=embed)
-        else:
-            # Wariant 2: Mam zakup i sprzedaż, policz ile zarobię
-            sprzedaz = float(arg2.replace(',', '.'))
-            sprzedaz_netto = sprzedaz / 1.23
-            # Odejmujemy prowizję Allegro (ok. 13%)
-            prowizja = sprzedaz * 0.13
-            zysk = sprzedaz_netto - zakup_netto - (prowizja / 1.23)
+        zakup_brutto = float(arg1.replace(',', '.'))
+        zakup_netto = zakup_brutto / 1.23
+        
+        # Wariant 1: !marza [zakup] [prowizja] -> Tabela sugerowanych cen
+        # Jeśli arg2 jest mały (np. < 50), traktujemy go jako % prowizji, a nie cenę sprzedaży.
+        # Chyba że podano 3 argumenty - wtedy wchodzimy w wariant 2.
+        
+        is_table_mode = (arg3 is None)
+        
+        if is_table_mode:
+            prowizja_proc = float(arg2.replace(',', '.')) / 100.0
             
-            kolor = 0x2ecc71 if zysk > 0 else 0xe74c3c
-            embed = discord.Embed(title="Wynik Transakcji", color=kolor)
-            embed.add_field(name="Zakup", value=f"{zakup} zł", inline=True)
-            embed.add_field(name="Sprzedaż", value=f"{sprzedaz} zł", inline=True)
-            embed.add_field(name="Zysk na czysto", value=f"**{zysk:.2f} zł**", inline=False)
-            embed.set_footer(text="Przyjęto szacunkową prowizję Allegro ~13%")
+            embed = discord.Embed(title=f"📊 Kalkulacja (VAT + Ryczałt 3%)", color=0x3498db)
+            embed.description = f"Zakup: **{zakup_brutto} zł**. Prowizja Allegro: **{prowizja_proc*100:.1f}%**"
+            
+            for cel in [10, 20, 30, 50, 100]:
+                # Wzór odwrócony:
+                # Cena Brutto = (Zysk_Cel * 1.23 + Zakup_Brutto) / (0.97 - Prowizja)
+                # Wyjaśnienie: 0.97 to (1 - 0.03 ryczałtu).
+                
+                mianownik = 0.97 - prowizja_proc
+                if mianownik <= 0:
+                    cena_brutto = 0 # Zabezpieczenie przed dzieleniem przez zero/minus
+                else:
+                    cena_brutto = (cel * 1.23 + zakup_brutto) / mianownik
+
+                embed.add_field(name=f"Zysk {cel} zł", value=f"Sprzedaj za: **{cena_brutto:.2f} zł**", inline=True)
+            
+            embed.set_footer(text="Ceny uwzględniają: VAT 23% (odliczony), Prowizję i Ryczałt 3%.")
             await ctx.send(embed=embed)
-    except: await ctx.send("❌ Błąd liczb. Użyj np. `!marza 100 150`")
+            
+        else:
+            # Wariant 2: !marza [zakup] [sprzedaz] [prowizja]
+            sprzedaz_brutto = float(arg2.replace(',', '.'))
+            prowizja_proc = float(arg3.replace(',', '.')) / 100.0
+            
+            sprzedaz_netto = sprzedaz_brutto / 1.23
+            
+            # Koszty
+            prowizja_allegro_netto = (sprzedaz_brutto * prowizja_proc) / 1.23
+            ryczalt = sprzedaz_netto * 0.03 # Ryczałt 3% od przychodu netto
+            
+            zysk_na_czysto = sprzedaz_netto - zakup_netto - prowizja_allegro_netto - ryczalt
+            
+            kolor = 0x2ecc71 if zysk_na_czysto > 0 else 0xe74c3c
+            
+            embed = discord.Embed(title="Wynik Transakcji (VAT + Ryczałt)", color=kolor)
+            embed.add_field(name="1. Zakup", value=f"{zakup_brutto:.2f} zł", inline=True)
+            embed.add_field(name="2. Sprzedaż", value=f"{sprzedaz_brutto:.2f} zł", inline=True)
+            embed.add_field(name="3. Prowizja", value=f"{prowizja_proc*100:.1f}%", inline=True)
+            
+            embed.add_field(name="---", value="---", inline=False)
+            
+            details = (
+                f"Zakup Netto: {zakup_netto:.2f} zł\n"
+                f"Sprzedaż Netto: {sprzedaz_netto:.2f} zł\n"
+                f"Koszt Allegro (netto): -{prowizja_allegro_netto:.2f} zł\n"
+                f"Podatek Ryczałt (3%): -{ryczalt:.2f} zł"
+            )
+            embed.add_field(name="Szczegóły", value=details, inline=False)
+            embed.add_field(name="ZYSK NA CZYSTO", value=f"💰 **{zysk_na_czysto:.2f} zł**", inline=False)
+            
+            await ctx.send(embed=embed)
+
+    except Exception as e:
+        await ctx.send(f"❌ Błąd: {e}\nUżyj: `!marza 100 200 10` (Kupno, Sprzedaż, Prowizja%)")
+
+# --- RESZTA KOMEND ---
 
 @bot.command()
 async def trend(ctx, *, kategoria: str = None):
-    """Analiza niszy przez AI"""
     await ctx.message.delete()
     if not kategoria: return await ctx.send("❌ Podaj kategorię, np. `!trend Smartwatche`")
     msg = await ctx.send(f"⏳ **Analizuję: {kategoria}...**")
@@ -359,7 +397,6 @@ async def trend(ctx, *, kategoria: str = None):
 
 @bot.command()
 async def test_allegro(ctx):
-    """Symulacja wpadnięcia zamówienia"""
     await ctx.message.delete()
     channel = bot.get_channel(TARGET_CHANNEL_ID)
     if channel:
@@ -374,7 +411,6 @@ async def test_allegro(ctx):
 
 @bot.command()
 async def test_msg(ctx):
-    """Symulacja wiadomości od klienta (Auto-Responder)"""
     await ctx.message.delete()
     channel = bot.get_channel(TARGET_CHANNEL_ID)
     if channel:
