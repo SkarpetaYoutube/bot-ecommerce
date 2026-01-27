@@ -21,8 +21,8 @@ ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
 # --- TUTAJ WKLEJ ID SWOJEGO KANAŁU ---
-# (Zastąp te zera swoim ID kanału, same cyfry)
-TARGET_CHANNEL_ID = 1464959293681045658 
+# (Zastąp zera swoim ID, same cyfry, bez cudzysłowu)
+TARGET_CHANNEL_ID = 1464959293681045658
 
 if not CLAUDE_KEY or not PERPLEXITY_KEY:
     print("⚠️ OSTRZEŻENIE: Brakuje kluczy AI!")
@@ -122,6 +122,3 @@ async def allegro_monitor():
                 # Budujemy listę produktów
                 produkty_tekst = ""
                 for item in order["lineItems"]:
-                    offer_title = item["offer"]["name"]
-                    qty = item["quantity"]
-                    produkty_tekst += f"• {qty}x **{offer_title}**\n
