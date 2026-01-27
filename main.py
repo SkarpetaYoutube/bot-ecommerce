@@ -21,8 +21,8 @@ ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
 # --- TUTAJ WKLEJ ID SWOJEGO KANAŁU ---
-# (Pamiętaj, żeby nie było cudzysłowu "", same cyferki)
-TARGET_CHANNEL_ID = 1464959293681045658
+# (Zastąp te zera swoim ID kanału, same cyfry)
+TARGET_CHANNEL_ID = 1464959293681045658 
 
 if not CLAUDE_KEY or not PERPLEXITY_KEY:
     print("⚠️ OSTRZEŻENIE: Brakuje kluczy AI!")
@@ -124,94 +124,4 @@ async def allegro_monitor():
                 for item in order["lineItems"]:
                     offer_title = item["offer"]["name"]
                     qty = item["quantity"]
-                    produkty_tekst += f"• {qty}x **{offer_title}**\n"
-
-                # --- WYSYŁANIE NA KONKRETNY KANAŁ ---
-                channel = bot.get_channel(TARGET_CHANNEL_ID)
-                
-                if channel:
-                    embed = discord.Embed(title="💰 NOWE ZAMÓWIENIE!", color=0xf1c40f)
-                    embed.add_field(name="Kupujący", value=kupujacy, inline=True)
-                    embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
-                    embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
-                    embed.set_footer(text=f"ID: {last_order_id} | {datetime.datetime.now().strftime('%H:%M')}")
-                    
-                    await channel.send(content="@here Wpadła kasa! 💸", embed=embed)
-                else:
-                    print(f"❌ Błąd: Nie znaleziono kanału o ID {TARGET_CHANNEL_ID}. Sprawdź ID w kodzie!")
-                        
-    except Exception as e:
-        print(f"Błąd w pętli Allegro: {e}")
-
-# --- LOGIKA AI ---
-async def pobierz_analize_live(okres, kategoria):
-    teraz = datetime.datetime.now().strftime("%d.%m.%Y")
-    if kategoria.lower() in ["wszystko", "all", "ogólne", "top", "hity"]:
-        temat = "OGÓLNE BESTSELLERY"
-        skupienie = "Cały polski rynek e-commerce."
-    else:
-        temat = f"Kategoria/Nisza: {kategoria}"
-        skupienie = f"Skup się dokładnie na: {kategoria}. Znajdź konkretne produkty."
-
-    prompt = f"""
-    Jesteś Ekspertem E-commerce. Data: {teraz}. Analiza na: {okres}.
-    TEMAT: {temat}. {skupienie}
-    ZASADY: 1. Zero HTML. Używaj Markdown. 2. Format listy.
-    STRUKTURA RAPORTU (5 produktów):
-    **[PEŁNA NAZWA PRODUKTU]**
-    • 💰 Cena: [PLN]
-    • 🗓️ Start: [Data]
-    • 📈 PEAK: [Data]
-    • 💡 Dlaczego teraz: [Powód]
-    Na końcu: ⚠️ CZEGO UNIKAĆ.
-    """
-    try:
-        response = await perplexity_client.chat.completions.create(
-            model="sonar-pro", messages=[{"role": "user", "content": prompt}]
-        )
-        return clean_text(response.choices[0].message.content)
-    except Exception as e: return f"Błąd AI: {str(e)}"
-
-async def generuj_opis_gpsr(produkt):
-    prompt = f"Napisz tekst GPSR dla: {produkt}. Zachowaj strukturę: 1. Bezpieczeństwo, 2. Dzieci, 3. Utylizacja. Bez Markdown."
-    try:
-        msg = await claude_client.messages.create(
-            model="claude-haiku-4-5-20251001", max_tokens=2500,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        return msg.content[0].text
-    except Exception as e: return f"Błąd: {e}"
-
-# --- KOMENDY ---
-@bot.event
-async def on_ready():
-    print(f"✅ Bot online: {bot.user}")
-    await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
-    # Startujemy pętlę monitorującą
-    if not allegro_monitor.is_running():
-        allegro_monitor.start()
-
-@bot.command()
-async def pomoc(ctx):
-    embed = discord.Embed(title="🛠️ Menu", color=0xff9900)
-    embed.add_field(name="🟠 !allegro_login", value="Krok 1: Link do logowania", inline=False)
-    embed.add_field(name="🟠 !allegro_kod [kod]", value="Krok 2: Wklej kod z linku", inline=False)
-    embed.add_field(name="🔥 !hity", value="Najlepsze okazje", inline=False)
-    embed.add_field(name="📈 !trend", value="Analiza kategorii", inline=False)
-    embed.add_field(name="💰 !marza", value="Kalkulator", inline=False)
-    embed.add_field(name="📄 !gpsr", value="Tekst prawny", inline=False)
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def allegro_login(ctx):
-    """Generuje link do logowania Allegro"""
-    if not ALLEGRO_CLIENT_ID:
-        return await ctx.send("❌ Brak Client ID w ustawieniach!")
-        
-    url = f"https://allegro.pl/auth/oauth/authorize?response_type=code&client_id={ALLEGRO_CLIENT_ID}&redirect_uri={ALLEGRO_REDIRECT_URI}"
-    
-    embed = discord.Embed(title="🔐 Logowanie do Allegro", color=0xff6600)
-    embed.description = (
-        "1. Kliknij w link poniżej.\n"
-        "2. Potwierdź logowanie na Allegro.\n"
-        "3. Zostaniesz przekierowany na stronę błędu (
+                    produkty_tekst += f"• {qty}x **{offer_title}**\n
