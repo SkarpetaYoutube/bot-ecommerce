@@ -20,7 +20,7 @@ ALLEGRO_CLIENT_ID = os.environ.get("ALLEGRO_CLIENT_ID")
 ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
-# --- ID KANAŁU (Wstawione Twoje) ---
+# --- ID KANAŁU ---
 TARGET_CHANNEL_ID = 1464959293681045658
 
 if not CLAUDE_KEY or not PERPLEXITY_KEY:
@@ -89,6 +89,9 @@ async def fetch_orders():
 async def allegro_monitor():
     global last_order_id, allegro_token
     
+    # [NOWE] Logowanie w konsoli, że bot działa
+    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] 🔍 Sprawdzam Allegro...")
+
     if not allegro_token: return # Nie jesteśmy zalogowani
 
     try:
@@ -118,7 +121,7 @@ async def allegro_monitor():
                 kwota = order["summary"]["totalToPay"]["amount"]
                 waluta = order["summary"]["totalToPay"]["currency"]
                 
-                # Budujemy listę produktów - TUTAJ BYŁ BŁĄD, UZUPEŁNIAM:
+                # Budujemy listę produktów
                 produkty_tekst = ""
                 for item in order["lineItems"]:
                     offer_title = item["offer"]["name"]
@@ -196,6 +199,7 @@ async def on_ready():
 
 @bot.command()
 async def pomoc(ctx):
+    await ctx.message.delete() # [NOWE] Czyści wiadomość użytkownika
     embed = discord.Embed(title="🛠️ Menu", color=0xff9900)
     embed.add_field(name="🟠 !allegro_login", value="Krok 1: Link do logowania", inline=False)
     embed.add_field(name="🟠 !allegro_kod [kod]", value="Krok 2: Wklej kod z linku", inline=False)
@@ -203,11 +207,13 @@ async def pomoc(ctx):
     embed.add_field(name="📈 !trend", value="Analiza kategorii", inline=False)
     embed.add_field(name="💰 !marza", value="Kalkulator", inline=False)
     embed.add_field(name="📄 !gpsr", value="Tekst prawny", inline=False)
+    embed.add_field(name="🧪 !test_allegro", value="Test powiadomienia", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
 async def allegro_login(ctx):
     """Generuje link do logowania Allegro"""
+    await ctx.message.delete() # [NOWE]
     if not ALLEGRO_CLIENT_ID:
         return await ctx.send("❌ Brak Client ID w ustawieniach!")
         
@@ -227,6 +233,7 @@ async def allegro_login(ctx):
 @bot.command()
 async def allegro_kod(ctx, code: str = None):
     """Wymienia kod na token"""
+    await ctx.message.delete() # [NOWE]
     global allegro_token
     if not code: return await ctx.send("❌ Podaj kod!")
     
@@ -241,51 +248,8 @@ async def allegro_kod(ctx, code: str = None):
 
 @bot.command()
 async def hity(ctx, *, okres: str = None):
+    await ctx.message.delete() # [NOWE]
     if not okres:
-        await ctx.send("📅 Podaj miesiąc:")
+        temp = await ctx.send("📅 Podaj miesiąc:")
         try:
-            msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30)
-            okres = msg.content
-        except asyncio.TimeoutError: return await ctx.send("⏰ Czas minął.")
-    msg = await ctx.send(f"⏳ **Szukam hitów: {okres}...**")
-    raport = await pobierz_analize_live(okres, "Wszystko")
-    if len(raport) > 3000: raport = raport[:3000] + "..."
-    await msg.edit(content=None, embed=discord.Embed(title=f"🏆 Hity: {okres}", description=raport, color=0xe74c3c))
-
-@bot.command()
-async def trend(ctx, *, kategoria: str = None):
-    if not kategoria: return await ctx.send("❌ Podaj kategorię, np. `!trend Smartwatche`")
-    msg = await ctx.send(f"⏳ **Analizuję rynek: {kategoria}...**")
-    raport = await pobierz_analize_live("Obecny miesiąc", kategoria)
-    if len(raport) > 3000: raport = raport[:3000] + "..."
-    await msg.edit(content=None, embed=discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x9b59b6))
-
-@bot.command()
-async def gpsr(ctx, *, produkt: str = None):
-    if not produkt: return await ctx.send("❌ Podaj produkt!")
-    msg = await ctx.send("⚖️ Piszę GPSR...")
-    tresc = await generuj_opis_gpsr(produkt)
-    if len(tresc) > 3000: tresc = tresc[:3000] + "..."
-    await msg.edit(content=None, embed=discord.Embed(description=f"```text\n{tresc}\n```", color=0x3498db))
-
-@bot.command()
-async def marza(ctx, arg1: str = None, arg2: str = None):
-    if not arg1: return await ctx.send("❌ Wpisz cenę.")
-    try:
-        zakup = float(arg1.replace(',', '.'))
-        zakup_netto = zakup / 1.23
-        if arg2 is None:
-            embed = discord.Embed(title=f"📊 Zakup: {zakup} zł", color=0x3498db)
-            for cel in [20, 30, 40, 50, 100]:
-                cena = ((zakup_netto + cel) / 0.97) * 1.23
-                embed.add_field(name=f"+{cel} zł", value=f"{cena:.2f} zł", inline=True)
-            await ctx.send(embed=embed)
-        else:
-            sprzedaz = float(arg2.replace(',', '.'))
-            zysk = (sprzedaz / 1.23 * 0.97) - zakup_netto
-            await ctx.send(embed=discord.Embed(title="Wynik", description=f"Zysk: **{zysk:.2f} zł**", color=0x2ecc71 if zysk > 0 else 0xe74c3c))
-    except: await ctx.send("❌ Błąd liczb.")
-
-if __name__ == "__main__":
-    keep_alive()
-    bot.run(TOKEN)
+            msg = await bot.wait_for('message', check=lambda m: m.
