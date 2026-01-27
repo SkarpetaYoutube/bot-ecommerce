@@ -302,16 +302,19 @@ async def allegro_kod(ctx, code: str = None):
         await msg.edit(content="❌ Błąd logowania.")
 
 # --- NAPRAWIONA FUNKCJA MARŻY ---
+# --- NAPRAWIONA FUNKCJA MARŻY (WERSJA FINALNA) ---
 @bot.command()
 async def marza(ctx, *args):
     """
-    1 argument (!marza 100) -> Wyświetla sugerowane ceny sprzedaży dla zysku 10/20/30/50/100 zł
-    2 argumenty (!marza 100 150) -> Oblicza dokładny zysk dla tej transakcji
+    Użycie:
+    1. !marza 100        -> Sugerowane ceny (przy założeniu 0% prowizji)
+    2. !marza 100 150    -> Oblicza zysk (przy założeniu 0% prowizji)
+    3. !marza 100 150 12 -> Oblicza zysk (zakup 100, sprzedaż 150, prowizja 12%)
     """
     await ctx.message.delete()
     
     if len(args) == 0:
-        return await ctx.send("❌ Użyj: `!marza [zakup]` LUB `!marza [zakup] [sprzedaz]`")
+        return await ctx.send("❌ Użyj: `!marza [zakup] [sprzedaz] [prowizja%]`")
 
     try:
         # Parsowanie pierwszego argumentu (ZAKUP)
@@ -322,44 +325,66 @@ async def marza(ctx, *args):
         if len(args) == 1:
             cele_zysku = [10, 20, 30, 50, 100]
             embed = discord.Embed(title=f"🛒 Zakup: {zakup_brutto:.2f} zł brutto", color=0x3498db)
-            embed.description = "Sugerowane ceny sprzedaży (aby uzyskać zysk na rękę):"
+            embed.description = "**Sugerowane ceny sprzedaży** (aby mieć X zł na rękę):\n*Nie uwzględniono prowizji Allegro!*"
             
             tekst_sugestii = ""
             for cel in cele_zysku:
-                # Wzór: Zysk = SprzedażNetto * (1 - ryczałt) - ZakupNetto
-                # SprzedażNetto = (Zysk + ZakupNetto) / (1 - ryczałt)
+                # Wzór: Zysk = SprzedażNetto * 0.97 - ZakupNetto
+                # SprzedażNetto = (Zysk + ZakupNetto) / 0.97
                 sprzedaz_netto_wymagana = (cel + zakup_netto) / 0.97
                 sprzedaz_brutto_wymagana = sprzedaz_netto_wymagana * 1.23
                 
-                tekst_sugestii += f"**Zysk {cel} zł** → Sprzedaj za: **{sprzedaz_brutto_wymagana:.2f} zł**\n"
+                tekst_sugestii += f"Zysk **{cel} zł** → Sprzedaj za: **{sprzedaz_brutto_wymagana:.2f} zł**\n"
             
             embed.add_field(name="Kalkulacja (VAT 23% + Ryczałt 3%)", value=tekst_sugestii, inline=False)
-            embed.set_footer(text="Prowizja Allegro nie wliczona (zależy od kategorii).")
             await ctx.send(embed=embed)
 
-        # --- OPCJA 2: ZAKUP I SPRZEDAŻ (Obliczenie zysku) ---
+        # --- OPCJA 2: ZAKUP + SPRZEDAŻ (+ opcjonalna PROWIZJA) ---
         elif len(args) >= 2:
             sprzedaz_brutto = parsuj_liczbe(args[1])
+            
+            # Jeśli podano 3 argument, to jest to prowizja %
+            prowizja_procent = parsuj_liczbe(args[2]) if len(args) > 2 else 0.0
+            
+            # Obliczenia
             sprzedaz_netto = sprzedaz_brutto / 1.23
             
-            # Podatki
-            ryczalt = sprzedaz_netto * 0.03
+            # Koszty
+            prowizja_kwota = sprzedaz_brutto * (prowizja_procent / 100) # Allegro liczy prowizję od brutto
+            ryczalt = sprzedaz_netto * 0.03 # Ryczałt 3% od przychodu netto
+            podatki_suma = ryczalt + (sprzedaz_netto * 0.23 - zakup_netto * 0.23) # VAT do wpłaty (uproszczone)
             
-            # Zysk na czysto
-            zysk = sprzedaz_netto - zakup_netto - ryczałt
+            # Zysk na czysto = Netto ze sprzedaży - Netto z zakupu - Ryczałt - Prowizja
+            # (Matematycznie równoważne: Zostaje nam brutto, płacimy VAT do US, ryczałt i prowizję)
+            zysk = sprzedaz_netto - zakup_netto - ryczałt - prowizja_kwota
             
-            kolor = 0x2ecc71 if zysk > 0 else 0xe74c3c
-            embed = discord.Embed(title="📊 Wynik Transakcji", color=kolor)
-            embed.add_field(name="Zakup", value=f"{zakup_brutto:.2f} zł", inline=True)
-            embed.add_field(name="Sprzedaż", value=f"{sprzedaz_brutto:.2f} zł", inline=True)
+            # Kolory i Emoji
+            if zysk > 0:
+                kolor = 0x2ecc71 # Zielony
+                emoji = "✅"
+            else:
+                kolor = 0xe74c3c # Czerwony
+                emoji = "⚠️"
+
+            embed = discord.Embed(title=f"{emoji} Wynik Transakcji", color=kolor)
             
-            szczegoly = (
-                f"Obroty Netto: {sprzedaz_netto:.2f} zł\n"
-                f"Koszt Netto: -{zakup_netto:.2f} zł\n"
-                f"Podatek (3%): -{ryczalt:.2f} zł\n"
+            embed.add_field(name="1. Ceny", value=f"Zakup: **{zakup_brutto:.2f} zł**\nSprzedaż: **{sprzedaz_brutto:.2f} zł**", inline=False)
+            
+            koszty_txt = (
+                f"• Towar netto: {zakup_netto:.2f} zł\n"
+                f"• Prowizja Allegro ({prowizja_procent}%): **-{prowizja_kwota:.2f} zł**\n"
+                f"• Ryczałt (3%): -{ryczalt:.2f} zł\n"
+                f"• VAT (23%): wliczony w netto"
             )
-            embed.add_field(name="Rozliczenie", value=szczegoly, inline=False)
-            embed.add_field(name="ZYSK NA CZYSTO", value=f"💰 **{zysk:.2f} zł**", inline=False)
+            embed.add_field(name="2. Koszty i Podatki", value=koszty_txt, inline=False)
+            
+            embed.add_field(name="3. ZYSK NA RĘKĘ", value=f"💰 **{zysk:.2f} zł**", inline=False)
+            
+            if prowizja_procent == 0:
+                embed.set_footer(text="⚠️ Uwaga: Obliczono bez prowizji Allegro! Dodaj trzecią liczbę, np. !marza 100 150 12")
+            else:
+                embed.set_footer(text=f"Uwzględniono prowizję: {prowizja_procent}%")
+
             await ctx.send(embed=embed)
 
     except Exception as e:
@@ -443,3 +468,4 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except Exception as e:
         print(f"❌ START ERROR: {e}")
+
