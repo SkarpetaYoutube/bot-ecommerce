@@ -21,7 +21,6 @@ ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
 # --- ID KANAŁU ---
-# Upewnij się, że to ID jest poprawne (powinno być liczbą, nie stringiem)
 TARGET_CHANNEL_ID = 1464959293681045658
 
 if not CLAUDE_KEY or not PERPLEXITY_KEY:
@@ -33,7 +32,7 @@ if not ALLEGRO_CLIENT_ID:
 claude_client = AsyncAnthropic(api_key=CLAUDE_KEY)
 perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.perplexity.ai")
 
-# Zmienne globalne Allegro (przechowywane w pamięci)
+# Zmienne globalne Allegro
 allegro_token = None
 last_order_id = None
 
@@ -46,6 +45,12 @@ def clean_text(text):
     if not text: return ""
     text = text.replace("**", "").replace("##", "").replace("###", "")
     return text.strip()
+
+def polski_czas():
+    """Zwraca godzinę w polskiej strefie czasowej (UTC+1)"""
+    # Jeśli jest czas letni, zmień hours=1 na hours=2
+    czas_pl = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
+    return czas_pl.strftime('%H:%M')
 
 # --- LOGIKA ALLEGRO ---
 async def get_allegro_token(auth_code):
@@ -90,10 +95,9 @@ async def fetch_orders():
 async def allegro_monitor():
     global last_order_id, allegro_token
     
-    # [LOGI] Logowanie w konsoli, że bot działa (Serce bota)
-    print(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] 🔍 Sprawdzam Allegro...")
+    print(f"[{polski_czas()}] 🔍 Sprawdzam Allegro...")
 
-    if not allegro_token: return # Nie jesteśmy zalogowani
+    if not allegro_token: return 
 
     try:
         data = await fetch_orders()
@@ -102,37 +106,26 @@ async def allegro_monitor():
         orders = data["checkoutForms"]
         if not orders: return
 
-        # Sortujemy od najstarszego do najnowszego
         orders.sort(key=lambda x: x["updatedAt"])
         
-        # Jeśli to pierwsze uruchomienie, zapamiętujemy najnowsze i nie spamujemy
         if last_order_id is None:
             last_order_id = orders[-1]["id"]
             print(f"✅ Allegro połączone. Ostatnie zamówienie ID: {last_order_id}")
             return
 
-        # Szukamy nowych zamówień
         for order in orders:
-            # Sprawdzamy czy to zamówienie jest nowsze niż ostatnie zapamiętane
             if order["id"] > last_order_id:
                 last_order_id = order["id"]
                 
-                # Wyciągamy dane do powiadomienia
                 kupujacy = order["buyer"]["login"]
                 kwota = order["summary"]["totalToPay"]["amount"]
                 waluta = order["summary"]["totalToPay"]["currency"]
                 
-                # Budujemy listę produktów
                 produkty_tekst = ""
                 for item in order["lineItems"]:
                     offer_title = item["offer"]["name"]
                     qty = item["quantity"]
                     produkty_tekst += f"• {qty}x **{offer_title}**\n"
-
-                # --- WYSYŁANIE NA KONKRETNY KANAŁ ---
-                if TARGET_CHANNEL_ID == 0:
-                     print("❌ Błąd: Nie ustawiłeś TARGET_CHANNEL_ID w kodzie!")
-                     return
 
                 channel = bot.get_channel(TARGET_CHANNEL_ID)
                 
@@ -141,11 +134,12 @@ async def allegro_monitor():
                     embed.add_field(name="Kupujący", value=kupujacy, inline=True)
                     embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
                     embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
-                    embed.set_footer(text=f"ID: {last_order_id} | {datetime.datetime.now().strftime('%H:%M')}")
+                    # Używamy polskiego czasu
+                    embed.set_footer(text=f"ID: {last_order_id} | {polski_czas()}")
                     
                     await channel.send(content="@here Wpadła kasa! 💸", embed=embed)
                 else:
-                    print(f"❌ Błąd: Nie znaleziono kanału o ID {TARGET_CHANNEL_ID}. Sprawdź ID czy bot ma do niego dostęp!")
+                    print(f"❌ Błąd: Nie znaleziono kanału o ID {TARGET_CHANNEL_ID}")
                         
     except Exception as e:
         print(f"Błąd w pętli Allegro: {e}")
@@ -194,7 +188,6 @@ async def generuj_opis_gpsr(produkt):
 async def on_ready():
     print(f"✅ Bot online: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
-    # Startujemy pętlę monitorującą
     if not allegro_monitor.is_running():
         allegro_monitor.start()
 
@@ -205,6 +198,7 @@ async def pomoc(ctx):
     embed.add_field(name="🟠 !allegro_login", value="Krok 1: Link do logowania", inline=False)
     embed.add_field(name="🟠 !allegro_kod [kod]", value="Krok 2: Wklej kod z linku", inline=False)
     embed.add_field(name="🔥 !hity", value="Najlepsze okazje", inline=False)
+    embed.add_field(name="🔍 !ostatnie", value="Pokaż ostatnie PRAWDZIWE zamówienie", inline=False)
     embed.add_field(name="📈 !trend", value="Analiza kategorii", inline=False)
     embed.add_field(name="💰 !marza", value="Kalkulator", inline=False)
     embed.add_field(name="📄 !gpsr", value="Tekst prawny", inline=False)
@@ -253,7 +247,6 @@ async def hity(ctx, *, okres: str = None):
     if not okres:
         temp = await ctx.send("📅 Podaj miesiąc:")
         try:
-            # Poniższa linia była ucięta w Twoim poprzednim kodzie
             msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30)
             okres = msg.content
             await msg.delete()
@@ -320,10 +313,54 @@ async def test_allegro(ctx):
         embed.add_field(name="Kupujący", value="Janusz_Biznesu (Test)", inline=True)
         embed.add_field(name="Kwota", value="**123.00 PLN**", inline=True)
         embed.add_field(name="📦 Produkty", value="• 1x **Wiertarka Testowa**", inline=False)
-        embed.set_footer(text=f"ID: TEST-000 | {datetime.datetime.now().strftime('%H:%M')}")
+        embed.set_footer(text=f"ID: TEST-000 | {polski_czas()}")
         await channel.send(content="@here To jest test! 💸", embed=embed)
     else:
         await ctx.send(f"❌ Błąd: Bot nie widzi kanału {TARGET_CHANNEL_ID}")
+
+@bot.command()
+async def ostatnie(ctx):
+    """Pobiera i wyświetla ostatnie PRAWDZIWE zamówienie z Allegro"""
+    await ctx.message.delete()
+    global allegro_token
+    
+    if not allegro_token:
+        return await ctx.send("❌ Najpierw zaloguj się komendą `!allegro_login`!")
+
+    msg = await ctx.send("🔍 Pobieram dane z Twojego konta Allegro...")
+
+    try:
+        data = await fetch_orders()
+        
+        # Sprawdzamy czy są jakiekolwiek zamówienia
+        if not data or "checkoutForms" not in data or not data["checkoutForms"]:
+            return await msg.edit(content="ℹ️ Połączono z Allegro, ale **nie znaleziono żadnych zamówień** na liście.")
+
+        orders = data["checkoutForms"]
+        orders.sort(key=lambda x: x["updatedAt"]) 
+        last_order = orders[-1] # Bierzemy ostatnie
+
+        # Wyciągamy dane
+        kupujacy = last_order["buyer"]["login"]
+        kwota = last_order["summary"]["totalToPay"]["amount"]
+        waluta = last_order["summary"]["totalToPay"]["currency"]
+        order_id = last_order["id"]
+
+        produkty_tekst = ""
+        for item in last_order["lineItems"]:
+            produkty_tekst += f"• {item['quantity']}x **{item['offer']['name']}**\n"
+
+        # Tworzymy Embed
+        embed = discord.Embed(title="🛒 OSTATNIE PRAWDZIWE ZAMÓWIENIE", color=0x2ecc71)
+        embed.add_field(name="Kupujący", value=kupujacy, inline=True)
+        embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
+        embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
+        embed.set_footer(text=f"ID: {order_id} | Czas PL: {polski_czas()}")
+
+        await msg.edit(content=None, embed=embed)
+
+    except Exception as e:
+        await msg.edit(content=f"❌ Błąd podczas pobierania: {e}")
 
 if __name__ == "__main__":
     keep_alive()
