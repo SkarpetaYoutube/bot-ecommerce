@@ -7,20 +7,14 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI 
 from keep_alive import keep_alive 
 
-# --- KONFIGURACJA (POPRAWIONA) ---
-# Teraz kod jest mądrzejszy - sprawdzi obie nazwy zmiennych, żebyś nie musiał zmieniać nic na Renderze
+# --- KONFIGURACJA ---
 TOKEN = os.environ.get("DISCORD_TOKEN")
+CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
+PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
 
-# Sprawdzamy czy klucz jest pod nazwą API_KEY czy TOKEN (bo na screenach masz TOKEN)
-CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY") or os.environ.get("CLAUDE_TOKEN")
-PERPLEXITY_KEY = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("PERPLEXITY_TOKEN")
-
-if not CLAUDE_KEY or not PERPLEXITY_KEY:
-    print("⚠️ BŁĄD: Brakuje kluczy API w zmiennych środowiskowych!")
-
-# Inicjalizacja klientów z poprawnymi kluczami
-claude_client = AsyncAnthropic(api_key=CLAUDE_KEY)
-perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.perplexity.ai")
+# Używamy modelu Sonnet, bo najlepiej radzi sobie z formatowaniem tekstu prawnego
+claude_client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
+perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_API_KEY, base_url="https://api.perplexity.ai")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -29,6 +23,7 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 # --- FUNKCJE POMOCNICZE ---
 def clean_text(text):
     if not text: return ""
+    # Usuwamy ewentualne pozostałości HTML/Markdown, choć prompt tego zabrania
     text = text.replace("**", "").replace("##", "").replace("###", "")
     return text.strip()
 
@@ -48,7 +43,7 @@ async def pobierz_analize_live(okres, kategoria):
     TEMAT: {temat}. {skupienie}
     
     ZASADY: 
-    1. Zero HTML. Używaj Markdown.
+    1. Zero HTML. Używaj Markdown (tu akurat potrzebujemy pogrubień dla czytelności listy).
     2. Format ma być idealnie czytelny jak lista zadań.
     
     STRUKTURA RAPORTU:
@@ -72,6 +67,7 @@ async def pobierz_analize_live(okres, kategoria):
         return f"Błąd AI: {str(e)}"
 
 async def generuj_opis_gpsr(produkt):
+    # NOWY PROMPT - wymusza styl "surowy" zgodny z Twoim wzorem
     prompt = f"""
     Napisz profesjonalny tekst GPSR (General Product Safety Regulation) dla produktu: {produkt}.
     
@@ -85,7 +81,7 @@ async def generuj_opis_gpsr(produkt):
 
     1. Bezpieczeństwo
     Główne zagrożenia
-    [Tu wymień konkretne zagrożenia dla tego produktu]
+    [Tu wymień konkretne zagrożenia dla tego produktu w myślnikach lub akapitach]
     Zasady bezpiecznego użytkowania
     [Tu konkretne zasady użytkowania]
     Materiały i zgodność
@@ -105,8 +101,9 @@ async def generuj_opis_gpsr(produkt):
     """
     
     try:
+        # Używamy claude-3-5-sonnet, bo jest najlepszy do trzymania formatu
         msg = await claude_client.messages.create(
-            model="claude-haiku-4-5-20251001", 
+            model="claude-3-5-sonnet-20240620", 
             max_tokens=2500,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -119,6 +116,7 @@ async def on_ready():
     print(f"✅ Bot online: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
 
+# Obsługa błędu nieistniejącej komendy (żeby bot nie gasł)
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -146,10 +144,7 @@ async def hity(ctx, *, okres: str = None):
 
     msg = await ctx.send(f"⏳ **Szukam hitów na: {okres}...**")
     raport = await pobierz_analize_live(okres, "Wszystko")
-    
-    # LIMIT ZMNIEJSZONY DO 3000 ZNAKÓW (BEZPIECZNIEJ DLA DISCORDA)
-    if len(raport) > 3000: 
-        raport = raport[:3000] + "\n\n(...) [Ucięto ze względu na limit Discorda]"
+    if len(raport) > 4000: raport = raport[:4000] + "..."
     
     embed = discord.Embed(title=f"🏆 Hity: {okres}", description=raport, color=0xe74c3c)
     await msg.edit(content=None, embed=embed)
@@ -175,10 +170,7 @@ async def trend(ctx, *, okres: str = None):
 
     status = await ctx.send(f"🔍 **Analizuję: {kategoria} ({okres})...**")
     raport = await pobierz_analize_live(okres, kategoria)
-    
-    # LIMIT ZMNIEJSZONY DO 3000 ZNAKÓW
-    if len(raport) > 3000: 
-        raport = raport[:3000] + "\n\n(...) [Ucięto ze względu na limit Discorda]"
+    if len(raport) > 4000: raport = raport[:4000] + "..."
 
     embed = discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x2ecc71)
     await status.edit(content=None, embed=embed)
@@ -191,10 +183,7 @@ async def gpsr(ctx, *, produkt: str = None):
     msg = await ctx.send("⚖️ Piszę GPSR (wzór tekstowy)...")
     tresc = await generuj_opis_gpsr(produkt)
     
-    # LIMIT ZMNIEJSZONY DO 3000 ZNAKÓW
-    if len(tresc) > 3000: 
-        tresc = tresc[:3000] + "\n\n⚠️ [Tekst przycięty - limit Discorda]"
-
+    # Wyświetlamy jako blok kodu 'text', żeby zachować surowy format bez formatowania Discorda
     embed = discord.Embed(description=f"```text\n{tresc}\n```", color=0x3498db)
     await msg.edit(content=None, embed=embed)
 
