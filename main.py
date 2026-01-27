@@ -126,7 +126,7 @@ async def oznacz_jako_przeczytane(thread_id, last_msg_id):
     async with aiohttp.ClientSession() as session:
         await session.put(url, headers=headers, json=payload)
 
-# --- PĘTLA AUTO-RESPONDERA (NOWOŚĆ) ---
+# --- PĘTLA AUTO-RESPONDERA ---
 @tasks.loop(minutes=3) # Sprawdza co 3 minuty
 async def allegro_responder():
     global allegro_token, tryb_testowy, responder_active
@@ -251,9 +251,9 @@ async def on_ready():
 async def pomoc(ctx):
     await ctx.message.delete()
     embed = discord.Embed(title="🛠️ Menu Bota", color=0xff9900)
-    embed.add_field(name="🔑 Allegro", value="`!allegro_login` - Logowanie\n`!ostatnie` - Ost. zamówienie", inline=False)
-    embed.add_field(name="🤖 Auto-Responder", value="`!auto_start` - Włącz sprawdzanie wiadomości\n`!tryb_live` - Włącz wysyłanie (OSTROŻNIE!)\n`!tryb_test` - Włącz tylko podgląd", inline=False)
-    embed.add_field(name="🧠 AI", value="`!hity`, `!trend`, `!gpsr`", inline=False)
+    embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`", inline=False)
+    embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg` (Symulacja)", inline=False)
+    embed.add_field(name="🧠 Narzędzia", value="`!marza` - Kalkulator\n`!trend` - Badanie rynku\n`!gpsr` - Teksty prawne", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -309,6 +309,81 @@ async def allegro_kod(ctx, code: str = None):
         await msg.edit(content="✅ **Sukces!** Połączono z Allegro.")
     else:
         await msg.edit(content="❌ Błąd logowania.")
+
+# --- PRZYWRÓCONE KOMENDY (MARŻA, TREND, TESTY) ---
+
+@bot.command()
+async def marza(ctx, arg1: str = None, arg2: str = None):
+    """Kalkulator marży"""
+    await ctx.message.delete()
+    if not arg1: return await ctx.send("❌ Wpisz cenę zakupu, np: `!marza 50`")
+    try:
+        zakup = float(arg1.replace(',', '.'))
+        zakup_netto = zakup / 1.23
+        if arg2 is None:
+            # Wariant 1: Mam cenę zakupu, pokaż za ile sprzedać
+            embed = discord.Embed(title=f"📊 Zakup: {zakup} zł brutto", color=0x3498db)
+            embed.description = "Sugerowane ceny sprzedaży (dla zysku na rękę):"
+            for cel in [10, 20, 30, 50, 100]:
+                # Wzór: (Zakup_Netto + Zysk) / (1 - Prowizja_Allegro) * VAT
+                # Zakładamy średnią prowizję 13% (0.87)
+                cena = ((zakup_netto + cel) / 0.87) * 1.23
+                embed.add_field(name=f"Zysk {cel} zł", value=f"Sprzedaj za: **{cena:.2f} zł**", inline=True)
+            await ctx.send(embed=embed)
+        else:
+            # Wariant 2: Mam zakup i sprzedaż, policz ile zarobię
+            sprzedaz = float(arg2.replace(',', '.'))
+            sprzedaz_netto = sprzedaz / 1.23
+            # Odejmujemy prowizję Allegro (ok. 13%)
+            prowizja = sprzedaz * 0.13
+            zysk = sprzedaz_netto - zakup_netto - (prowizja / 1.23)
+            
+            kolor = 0x2ecc71 if zysk > 0 else 0xe74c3c
+            embed = discord.Embed(title="Wynik Transakcji", color=kolor)
+            embed.add_field(name="Zakup", value=f"{zakup} zł", inline=True)
+            embed.add_field(name="Sprzedaż", value=f"{sprzedaz} zł", inline=True)
+            embed.add_field(name="Zysk na czysto", value=f"**{zysk:.2f} zł**", inline=False)
+            embed.set_footer(text="Przyjęto szacunkową prowizję Allegro ~13%")
+            await ctx.send(embed=embed)
+    except: await ctx.send("❌ Błąd liczb. Użyj np. `!marza 100 150`")
+
+@bot.command()
+async def trend(ctx, *, kategoria: str = None):
+    """Analiza niszy przez AI"""
+    await ctx.message.delete()
+    if not kategoria: return await ctx.send("❌ Podaj kategorię, np. `!trend Smartwatche`")
+    msg = await ctx.send(f"⏳ **Analizuję: {kategoria}...**")
+    raport = await pobierz_analize_live("Obecny miesiąc", kategoria)
+    if len(raport) > 4000: raport = raport[:4000] + "..."
+    await msg.edit(content=None, embed=discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x9b59b6))
+
+@bot.command()
+async def test_allegro(ctx):
+    """Symulacja wpadnięcia zamówienia"""
+    await ctx.message.delete()
+    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(title="💰 TEST ZAMÓWIENIA", color=0xf1c40f)
+        embed.add_field(name="Kupujący", value="TestUser123", inline=True)
+        embed.add_field(name="Kwota", value="**149.99 PLN**", inline=True)
+        embed.add_field(name="📦 Produkty", value="• 1x **Przykładowy Produkt Premium**\n• 2x **Gratis**", inline=False)
+        embed.set_footer(text=f"ID: TEST-12345 | {polski_czas()}")
+        await channel.send(content="@here Test! 💸", embed=embed)
+    else:
+        await ctx.send(f"❌ Błąd kanału ID: {TARGET_CHANNEL_ID}")
+
+@bot.command()
+async def test_msg(ctx):
+    """Symulacja wiadomości od klienta (Auto-Responder)"""
+    await ctx.message.delete()
+    channel = bot.get_channel(TARGET_CHANNEL_ID)
+    if channel:
+        embed = discord.Embed(title="🛡️ AUTO-RESPONDER (SYMULACJA)", color=0x3498db)
+        embed.description = f"Klient napisał: *Dzień dobry, kiedy wyślecie paczkę?*\n\n**W trybie LIVE bot odpisałby:**\n{AUTO_REPLY_MSG}"
+        embed.set_footer(text="To jest tylko test wyglądu.")
+        await channel.send(embed=embed)
+    else:
+        await ctx.send("❌ Błąd kanału.")
 
 @bot.command()
 async def hity(ctx, *, okres: str = None):
