@@ -20,7 +20,7 @@ ALLEGRO_CLIENT_ID = os.environ.get("ALLEGRO_CLIENT_ID")
 ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
-# --- ID KANAŁU (Upewnij się, że poprawne!) ---
+# --- ID KANAŁU ---
 TARGET_CHANNEL_ID = 1464959293681045658
 
 # Klienci AI
@@ -47,9 +47,23 @@ def polski_czas():
     czas_pl = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
     return czas_pl.strftime('%H:%M')
 
+def czy_swieze_zamowienie(data_str):
+    """Sprawdza, czy zamówienie jest młodsze niż 20 minut"""
+    try:
+        # Konwersja formatu Allegro (np. 2024-05-20T10:14:00.000Z) na obiekt czasu
+        # Zamiana Z na +00:00 dla kompatybilności
+        data_zamowienia = datetime.datetime.fromisoformat(data_str.replace('Z', '+00:00'))
+        teraz_utc = datetime.datetime.now(datetime.timezone.utc)
+        
+        roznica = teraz_utc - data_zamowienia
+        # Jeśli różnica jest mniejsza niż 20 minut (1200 sekund) -> TRUE
+        return roznica.total_seconds() < 1200
+    except Exception as e:
+        print(f"⚠️ Błąd daty: {e}")
+        return True # W razie błędu uznajemy za świeże, żeby nie zgubić
+
 # --- LOGIKA ALLEGRO ---
 async def get_allegro_token(auth_code):
-    """Wymienia kod z linku na token dostępu"""
     auth_str = f"{ALLEGRO_CLIENT_ID}:{ALLEGRO_CLIENT_SECRET}"
     b64_auth = base64.b64encode(auth_str.encode()).decode()
     
@@ -69,7 +83,6 @@ async def get_allegro_token(auth_code):
                 return None
 
 async def fetch_orders():
-    """Pobiera ostatnie zamówienia z Allegro"""
     global allegro_token
     if not allegro_token: return None
     
@@ -90,9 +103,6 @@ async def fetch_orders():
 async def allegro_monitor():
     global last_order_id, allegro_token
     
-    # Logowanie tylko co jakiś czas lub przy błędzie, żeby nie śmiecić w konsoli
-    # print(f"[{polski_czas()}] 🔍 Sprawdzam Allegro...") 
-
     if not allegro_token: return 
 
     try:
@@ -105,16 +115,22 @@ async def allegro_monitor():
         # Sortujemy od najstarszego do najnowszego
         orders.sort(key=lambda x: x["updatedAt"])
         
-        # Pierwsze uruchomienie - zapamiętaj ostatnie i nie wysyłaj powiadomienia
+        # Pierwsze uruchomienie - zapamiętaj ostatnie cicho
         if last_order_id is None:
             last_order_id = orders[-1]["id"]
-            print(f"✅ Allegro połączone. Baza ustawiona na ID: {last_order_id}")
+            print(f"✅ Baza ustawiona na ID: {last_order_id}")
             return
 
         # Sprawdzanie nowych
         for order in orders:
             if order["id"] > last_order_id:
-                last_order_id = order["id"]
+                last_order_id = order["id"] # Aktualizujemy ID zawsze
+                
+                # --- TUTAJ JEST FILTR CZASOWY ---
+                if not czy_swieze_zamowienie(order["updatedAt"]):
+                    print(f"⏳ Pominięto stare zamówienie (ID: {order['id']})")
+                    continue # Przechodzimy do następnego, nie wysyłamy
+                # --------------------------------
                 
                 kupujacy = order["buyer"]["login"]
                 kwota = order["summary"]["totalToPay"]["amount"]
@@ -189,12 +205,11 @@ async def on_ready():
     print(f"✅ ZALOGOWANO JAKO: {bot.user} (ID: {bot.user.id})")
     await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
     
-    # Zabezpieczenie przed podwójnym startem pętli
     if not allegro_monitor.is_running():
         allegro_monitor.start()
         print("✅ Monitor Allegro uruchomiony.")
     else:
-        print("⚠️ Monitor Allegro już działa (to dobrze).")
+        print("⚠️ Monitor Allegro już działa.")
 
 # --- KOMENDY ---
 @bot.command()
@@ -227,7 +242,7 @@ async def allegro_kod(ctx, code: str = None):
     
     if data and "access_token" in data:
         allegro_token = data["access_token"]
-        await msg.edit(content="✅ **Sukces!** Połączono z Allegro.")
+        await msg.edit(content="✅ **Sukces!** Połączono z Allegro. Bot czuwa.")
     else:
         await msg.edit(content="❌ Błąd logowania (zły kod lub wygasł).")
 
@@ -295,18 +310,42 @@ async def test_allegro(ctx):
 
 @bot.command()
 async def ostatnie(ctx):
+    """Pobiera i wyświetla ostatnie PRAWDZIWE zamówienie (Wersja Ładna)"""
     await ctx.message.delete()
     if not allegro_token: return await ctx.send("❌ Nie jesteś zalogowany! Użyj `!allegro_login`.")
-    msg = await ctx.send("🔍 Pobieram...")
+
+    msg = await ctx.send("🔍 Pobieram dane...")
+
     try:
         data = await fetch_orders()
-        if data and "checkoutForms" in data and data["checkoutForms"]:
-            last = sorted(data["checkoutForms"], key=lambda x: x["updatedAt"])[-1]
-            prod = ", ".join([i["offer"]["name"] for i in last["lineItems"]])
-            await msg.edit(content=f"🛒 Ostatnie: **{last['summary']['totalToPay']['amount']} PLN** - {prod}")
-        else:
-            await msg.edit(content="ℹ️ Brak zamówień.")
-    except Exception as e: await msg.edit(content=f"Błąd: {e}")
+        
+        if not data or "checkoutForms" not in data or not data["checkoutForms"]:
+            return await msg.edit(content="ℹ️ Brak zamówień.")
+
+        orders = data["checkoutForms"]
+        orders.sort(key=lambda x: x["updatedAt"])
+        last_order = orders[-1]
+
+        kupujacy = last_order["buyer"]["login"]
+        kwota = last_order["summary"]["totalToPay"]["amount"]
+        waluta = last_order["summary"]["totalToPay"]["currency"]
+        order_id = last_order["id"]
+        data_zakupu = last_order["updatedAt"]
+
+        produkty_tekst = ""
+        for item in last_order["lineItems"]:
+            produkty_tekst += f"• {item['quantity']}x **{item['offer']['name']}**\n"
+
+        embed = discord.Embed(title="🛒 OSTATNIE PRAWDZIWE ZAMÓWIENIE", color=0x2ecc71)
+        embed.add_field(name="Kupujący", value=kupujacy, inline=True)
+        embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
+        embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
+        embed.set_footer(text=f"ID: {order_id} | Data (System): {data_zakupu}")
+
+        await msg.edit(content=None, embed=embed)
+
+    except Exception as e:
+        await msg.edit(content=f"❌ Błąd: {e}")
 
 if __name__ == "__main__":
     keep_alive()
