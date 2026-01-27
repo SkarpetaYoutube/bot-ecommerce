@@ -7,13 +7,20 @@ from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI 
 from keep_alive import keep_alive 
 
-# --- KONFIGURACJA ---
+# --- KONFIGURACJA (POPRAWIONA) ---
+# Teraz kod jest mądrzejszy - sprawdzi obie nazwy zmiennych, żebyś nie musiał zmieniać nic na Renderze
 TOKEN = os.environ.get("DISCORD_TOKEN")
-CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
-PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
 
-claude_client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
-perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_API_KEY, base_url="https://api.perplexity.ai")
+# Sprawdzamy czy klucz jest pod nazwą API_KEY czy TOKEN (bo na screenach masz TOKEN)
+CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY") or os.environ.get("CLAUDE_TOKEN")
+PERPLEXITY_KEY = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("PERPLEXITY_TOKEN")
+
+if not CLAUDE_KEY or not PERPLEXITY_KEY:
+    print("⚠️ BŁĄD: Brakuje kluczy API w zmiennych środowiskowych!")
+
+# Inicjalizacja klientów z poprawnymi kluczami
+claude_client = AsyncAnthropic(api_key=CLAUDE_KEY)
+perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.perplexity.ai")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -98,7 +105,6 @@ async def generuj_opis_gpsr(produkt):
     """
     
     try:
-        # Zgodnie z prośbą: zostawiamy ten konkretny model Claude
         msg = await claude_client.messages.create(
             model="claude-haiku-4-5-20251001", 
             max_tokens=2500,
@@ -141,8 +147,9 @@ async def hity(ctx, *, okres: str = None):
     msg = await ctx.send(f"⏳ **Szukam hitów na: {okres}...**")
     raport = await pobierz_analize_live(okres, "Wszystko")
     
-    # Zabezpieczenie długości dla !hity
-    if len(raport) > 4000: raport = raport[:4000] + "..."
+    # LIMIT ZMNIEJSZONY DO 3000 ZNAKÓW (BEZPIECZNIEJ DLA DISCORDA)
+    if len(raport) > 3000: 
+        raport = raport[:3000] + "\n\n(...) [Ucięto ze względu na limit Discorda]"
     
     embed = discord.Embed(title=f"🏆 Hity: {okres}", description=raport, color=0xe74c3c)
     await msg.edit(content=None, embed=embed)
@@ -169,8 +176,9 @@ async def trend(ctx, *, okres: str = None):
     status = await ctx.send(f"🔍 **Analizuję: {kategoria} ({okres})...**")
     raport = await pobierz_analize_live(okres, kategoria)
     
-    # Zabezpieczenie długości dla !trend
-    if len(raport) > 4000: raport = raport[:4000] + "..."
+    # LIMIT ZMNIEJSZONY DO 3000 ZNAKÓW
+    if len(raport) > 3000: 
+        raport = raport[:3000] + "\n\n(...) [Ucięto ze względu na limit Discorda]"
 
     embed = discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x2ecc71)
     await status.edit(content=None, embed=embed)
@@ -183,10 +191,9 @@ async def gpsr(ctx, *, produkt: str = None):
     msg = await ctx.send("⚖️ Piszę GPSR (wzór tekstowy)...")
     tresc = await generuj_opis_gpsr(produkt)
     
-    # --- FIX NA DŁUGOŚĆ (Discord ma limit 4096 znaków w embedzie) ---
-    # Jeśli tekst jest za długi, ucinamy go, żeby bot nie zginął
-    if len(tresc) > 4000: 
-        tresc = tresc[:4000] + "\n\n⚠️ [Tekst przycięty - limit Discorda]"
+    # LIMIT ZMNIEJSZONY DO 3000 ZNAKÓW
+    if len(tresc) > 3000: 
+        tresc = tresc[:3000] + "\n\n⚠️ [Tekst przycięty - limit Discorda]"
 
     embed = discord.Embed(description=f"```text\n{tresc}\n```", color=0x3498db)
     await msg.edit(content=None, embed=embed)
