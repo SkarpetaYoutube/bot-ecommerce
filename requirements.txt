@@ -2,3 +2,4 @@ discord.py
 anthropic
 openai
 flask
+aiohttp
