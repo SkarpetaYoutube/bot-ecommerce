@@ -23,7 +23,7 @@ ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
 # --- ID KANAŁÓW (TUTAJ ROZDZIELILIŚMY KANAŁY) ---
 # 1. Kanał dla ZAMÓWIEŃ (pozostawiam Twój stary numer)
-KANAL_ZAMOWIENIA_ID = 1464959293681045658 
+KANAL_ZAMOWIENIA_ID = 1464959293681045658
 
 # 2. Kanał dla WIADOMOŚCI (TU WKLEJ ID KANAŁU #wiadomosci-klienci)
 KANAL_WIADOMOSCI_ID = 1465688093808922728  # <--- ZMIEŃ TE ZERA NA ID KANAŁU WIADOMOŚCI!
@@ -466,3 +466,4 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except Exception as e:
         print(f"❌ START ERROR: {e}")
+
