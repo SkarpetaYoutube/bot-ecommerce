@@ -42,8 +42,9 @@ perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.pe
 # Zmienne globalne
 allegro_token = None
 last_order_id = None
-tryb_testowy = True  # DOMYŚLNIE TRUE (BEZPIECZNIE)
-responder_active = False # Czy auto-responder jest włączony
+processed_msg_ids = set() # <--- DODAJ TĘ LINIJKĘ (Pamięć powiadomień)
+tryb_testowy = True
+responder_active = False
 
 # Konfiguracja bota
 intents = discord.Intents.default()
@@ -138,48 +139,69 @@ async def oznacz_jako_przeczytane(thread_id, last_msg_id):
         await session.put(url, headers=headers, json=payload)
 
 # --- PĘTLA AUTO-RESPONDERA ---
-@tasks.loop(minutes=3) 
+# --- PĘTLA AUTO-RESPONDERA I POWIADOMIEŃ ---
+@tasks.loop(minutes=2) 
 async def allegro_responder():
-    global allegro_token, tryb_testowy, responder_active
+    global allegro_token, tryb_testowy, responder_active, processed_msg_ids
     
-    if not responder_active or not allegro_token: return
+    # ZMIANA: Usuwamy blokadę 'responder_active'. Bot ma działać w tle zawsze, gdy jest token!
+    if not allegro_token: return
 
     try:
         data = await pobierz_wiadomosci()
         if not data or "threads" not in data: return
 
         for thread in data["threads"]:
-            if thread["read"] == False:
-                last_msg = thread["lastMessage"]
-                author_role = last_msg["author"]["role"]
-                thread_id = thread["id"]
+            last_msg = thread["lastMessage"]
+            msg_id = last_msg["id"]
+            author_role = last_msg["author"]["role"]
+            thread_id = thread["id"]
+            
+            # Sprawdzamy czy wiadomość jest świeża (np. z ostatnich 20 min)
+            is_fresh = czy_swieze_zamowienie(last_msg["createdAt"]) 
+
+            # --- CZĘŚĆ 1: POWIADOMIENIE NA DISCORD (Działa ZAWSZE dla nowych wiadomości) ---
+            # Warunek: Klient + Świeża wiadomość + Nie było jeszcze powiadomienia
+            if author_role == "BUYER" and is_fresh and msg_id not in processed_msg_ids:
+                processed_msg_ids.add(msg_id) # Zapamiętaj, że wysłano info
                 
-                if author_role == "BUYER":
-                    if tryb_testowy:
-                        # TUTAJ UŻYWAMY KANAŁU WIADOMOŚCI
+                channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
+                if channel:
+                    embed = discord.Embed(title="📩 NOWA WIADOMOŚĆ", color=0x3498db)
+                    embed.add_field(name="Klient", value=thread["interlocutor"]["login"], inline=True)
+                    embed.add_field(name="Treść", value=f"*{last_msg['text']}*", inline=False)
+                    
+                    status_ar = "✅ Włączony" if responder_active else "❌ Wyłączony (Tylko powiadomienie)"
+                    if thread["read"]: status_ar += " (Odczytana na Allegro)"
+                    
+                    embed.set_footer(text=f"Auto-Reply: {status_ar} | {polski_czas()}")
+                    await channel.send(content="@here Klient pisze!", embed=embed)
+                    print(f"✅ Wysłano powiadomienie o wiadomości ID: {msg_id}")
+
+            # --- CZĘŚĆ 2: AUTO-REPLY (Działa TYLKO gdy włączone i nieprzeczytane) ---
+            if responder_active and thread["read"] == False and author_role == "BUYER":
+                
+                if tryb_testowy:
+                    # W trybie testowym tylko logujemy, że bot by odpisał
+                    print(f"🛡️ [TEST] Bot odpisałby na wątek {thread_id}")
+                    # Oznaczamy wirtualnie jako "przetworzone" w logach, żeby nie spamować konsoli
+                    pass 
+                
+                else:
+                    # TRYB LIVE - WYSYŁANIE ODPOWIEDZI
+                    sukces = await wyslij_odpowiedz(thread_id, AUTO_REPLY_MSG)
+                    if sukces:
+                        print(f"🤖 Odpisano automatycznie do wątku {thread_id}")
+                        await oznacz_jako_przeczytane(thread_id, msg_id)
+                        
                         channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
                         if channel:
-                            embed = discord.Embed(title="🛡️ AUTO-RESPONDER (TEST)", color=0x3498db)
-                            embed.description = f"Klient napisał: *{last_msg['text']}*\n\n**W trybie LIVE bot odpisałby:**\n{AUTO_REPLY_MSG}"
-                            embed.set_footer(text="Wpisz !tryb_live aby włączyć wysyłanie.")
-                            await channel.send(embed=embed)
-                        pass 
-                    
+                            await channel.send(f"🤖 **Auto-Reply:** Wysłano odpowiedź do klienta.")
                     else:
-                        sukces = await wyslij_odpowiedz(thread_id, AUTO_REPLY_MSG)
-                        if sukces:
-                            print(f"✅ Odpisano automatycznie do wątku {thread_id}")
-                            await oznacz_jako_przeczytane(thread_id, last_msg["id"])
-                            # TUTAJ UŻYWAMY KANAŁU WIADOMOŚCI
-                            channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
-                            if channel:
-                                await channel.send(f"🤖 **Auto-Reply wysłane!** Odpisałem klientowi na wiadomość.")
-                        else:
-                            print(f"❌ Błąd wysyłania odpowiedzi do {thread_id}")
+                        print(f"❌ Błąd wysyłania odpowiedzi do {thread_id}")
 
     except Exception as e:
-        print(f"Błąd Responderea: {e}")
-
+        print(f"Błąd Respondera: {e}")
 
 # --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA (POLLING) ---
 @tasks.loop(seconds=60)
@@ -466,4 +488,5 @@ if __name__ == "__main__":
         bot.run(TOKEN)
     except Exception as e:
         print(f"❌ START ERROR: {e}")
+
 
