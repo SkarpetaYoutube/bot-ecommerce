@@ -8,13 +8,17 @@ from openai import AsyncOpenAI
 from keep_alive import keep_alive 
 
 # --- KONFIGURACJA ---
+# Zabezpieczenie: kod sam sprawdzi czy klucz nazywa się _KEY czy _TOKEN
 TOKEN = os.environ.get("DISCORD_TOKEN")
-CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")
-PERPLEXITY_API_KEY = os.environ.get("PERPLEXITY_API_KEY")
+CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY") or os.environ.get("CLAUDE_TOKEN")
+PERPLEXITY_KEY = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("PERPLEXITY_TOKEN")
 
-# Używamy modelu Sonnet, bo najlepiej radzi sobie z formatowaniem tekstu prawnego
-claude_client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
-perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_API_KEY, base_url="https://api.perplexity.ai")
+if not CLAUDE_KEY or not PERPLEXITY_KEY:
+    print("⚠️ OSTRZEŻENIE: Brakuje kluczy API w zmiennych środowiskowych!")
+
+# Inicjalizacja klientów
+claude_client = AsyncAnthropic(api_key=CLAUDE_KEY)
+perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.perplexity.ai")
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -23,7 +27,6 @@ bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
 # --- FUNKCJE POMOCNICZE ---
 def clean_text(text):
     if not text: return ""
-    # Usuwamy ewentualne pozostałości HTML/Markdown, choć prompt tego zabrania
     text = text.replace("**", "").replace("##", "").replace("###", "")
     return text.strip()
 
@@ -35,19 +38,20 @@ async def pobierz_analize_live(okres, kategoria):
         temat = "OGÓLNE BESTSELLERY"
         skupienie = "Cały polski rynek e-commerce."
     else:
-        temat = f"Kategoria: {kategoria}"
-        skupienie = f"Nisza: {kategoria}."
+        # Tutaj prompt dostanie informację np. "Dom i Ogród -> Meble"
+        temat = f"Kategoria/Nisza: {kategoria}"
+        skupienie = f"Skup się dokładnie na: {kategoria}. Znajdź konkretne produkty."
 
     prompt = f"""
     Jesteś Ekspertem E-commerce. Data: {teraz}. Analiza na: {okres}.
     TEMAT: {temat}. {skupienie}
     
     ZASADY: 
-    1. Zero HTML. Używaj Markdown (tu akurat potrzebujemy pogrubień dla czytelności listy).
+    1. Zero HTML. Używaj Markdown.
     2. Format ma być idealnie czytelny jak lista zadań.
     
     STRUKTURA RAPORTU:
-    Dla każdego z 5 produktów wypisz:
+    Dla każdego z 5 produktów (największy potencjał sprzedażowy) wypisz:
     
     **[PEŁNA NAZWA PRODUKTU]**
     • 💰 Cena: [zakres cenowy PLN]
@@ -67,7 +71,6 @@ async def pobierz_analize_live(okres, kategoria):
         return f"Błąd AI: {str(e)}"
 
 async def generuj_opis_gpsr(produkt):
-    # NOWY PROMPT - wymusza styl "surowy" zgodny z Twoim wzorem
     prompt = f"""
     Napisz profesjonalny tekst GPSR (General Product Safety Regulation) dla produktu: {produkt}.
     
@@ -81,7 +84,7 @@ async def generuj_opis_gpsr(produkt):
 
     1. Bezpieczeństwo
     Główne zagrożenia
-    [Tu wymień konkretne zagrożenia dla tego produktu w myślnikach lub akapitach]
+    [Tu wymień konkretne zagrożenia dla tego produktu]
     Zasady bezpiecznego użytkowania
     [Tu konkretne zasady użytkowania]
     Materiały i zgodność
@@ -101,9 +104,9 @@ async def generuj_opis_gpsr(produkt):
     """
     
     try:
-        # Używamy claude-3-5-sonnet, bo jest najlepszy do trzymania formatu
+        # Zostawiamy Haiku 4.5 zgodnie z Twoim wyborem
         msg = await claude_client.messages.create(
-            model="claude-3-5-sonnet-20240620", 
+            model="claude-haiku-4-5-20251001", 
             max_tokens=2500,
             messages=[{"role": "user", "content": prompt}]
         )
@@ -116,7 +119,6 @@ async def on_ready():
     print(f"✅ Bot online: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
 
-# Obsługa błędu nieistniejącej komendy (żeby bot nie gasł)
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -126,8 +128,8 @@ async def on_command_error(ctx, error):
 @bot.command()
 async def pomoc(ctx):
     embed = discord.Embed(title="🛠️ Menu", color=0xff9900)
-    embed.add_field(name="🔥 !hity", value="Najlepsze okazje", inline=False)
-    embed.add_field(name="📈 !trend", value="Analiza kategorii", inline=False)
+    embed.add_field(name="🔥 !hity", value="Najlepsze okazje (Ogólne)", inline=False)
+    embed.add_field(name="📈 !trend", value="Analiza kategorii (Można doprecyzować)", inline=False)
     embed.add_field(name="💰 !marza", value="Kalkulator cen", inline=False)
     embed.add_field(name="📄 !gpsr [produkt]", value="Tekst prawny (czysty tekst)", inline=False)
     await ctx.send(embed=embed)
@@ -142,9 +144,11 @@ async def hity(ctx, *, okres: str = None):
         except asyncio.TimeoutError:
             return await ctx.send("⏰ Czas minął.")
 
-    msg = await ctx.send(f"⏳ **Szukam hitów na: {okres}...**")
+    msg = await ctx.send(f"⏳ **Szukam ogólnych hitów na: {okres}...**")
     raport = await pobierz_analize_live(okres, "Wszystko")
-    if len(raport) > 4000: raport = raport[:4000] + "..."
+    
+    # LIMIT ZMNIEJSZONY DO 3000 (Bezpiecznik Discorda)
+    if len(raport) > 3000: raport = raport[:3000] + "\n\n(...) [Ucięto limit]"
     
     embed = discord.Embed(title=f"🏆 Hity: {okres}", description=raport, color=0xe74c3c)
     await msg.edit(content=None, embed=embed)
@@ -153,6 +157,7 @@ async def hity(ctx, *, okres: str = None):
 async def trend(ctx, *, okres: str = None):
     def check(m): return m.author == ctx.author and m.channel == ctx.channel
     
+    # 1. Pytanie o OKRES
     if not okres:
         await ctx.send("📅 Jaki okres analizujemy? (np. *Luty*):")
         try:
@@ -161,18 +166,41 @@ async def trend(ctx, *, okres: str = None):
         except asyncio.TimeoutError:
             return await ctx.send("⏰ Czas minął.")
 
-    await ctx.send(f"📂 Ok, okres: **{okres}**. Teraz podaj kategorię (np. *Ogród*):")
+    # 2. Pytanie o GŁÓWNĄ KATEGORIĘ
+    await ctx.send(f"📂 Ok, okres: **{okres}**. Podaj główną kategorię (np. *Dom i Ogród*):")
     try:
         kat_msg = await bot.wait_for('message', check=check, timeout=30)
-        kategoria = kat_msg.content
+        glowna_kategoria = kat_msg.content
     except asyncio.TimeoutError:
         return await ctx.send("⏰ Czas minął.")
 
-    status = await ctx.send(f"🔍 **Analizuję: {kategoria} ({okres})...**")
-    raport = await pobierz_analize_live(okres, kategoria)
-    if len(raport) > 4000: raport = raport[:4000] + "..."
+    # 3. Pytanie o DOPRECYZOWANIE (Nowość)
+    await ctx.send(
+        f"🎯 Czy chcesz doprecyzować w **{glowna_kategoria}**? (np. wpisz *Narzędzia*, *Meble*)\n"
+        "👉 Jeśli wolisz ogólny trend dla całej kategorii, wpisz **nie**."
+    )
+    try:
+        sub_msg = await bot.wait_for('message', check=check, timeout=30)
+        doprecyzowanie = sub_msg.content
+    except asyncio.TimeoutError:
+        return await ctx.send("⏰ Czas minął.")
 
-    embed = discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x2ecc71)
+    # 4. Ustalanie co wysłać do AI
+    if doprecyzowanie.lower() in ['nie', 'no', '-', 'brak', 'ogólne', 'wszystko']:
+        final_kategoria = glowna_kategoria
+        info_msg = f"🔍 **Analizuję ogólnie: {final_kategoria} ({okres})...**"
+    else:
+        # Łączymy kategorię z podkategorią dla lepszego promptu
+        final_kategoria = f"{glowna_kategoria} -> {doprecyzowanie}"
+        info_msg = f"🔍 **Analizuję niszę: {doprecyzowanie} (w: {glowna_kategoria})...**"
+
+    status = await ctx.send(info_msg)
+    raport = await pobierz_analize_live(okres, final_kategoria)
+    
+    # LIMIT ZMNIEJSZONY DO 3000
+    if len(raport) > 3000: raport = raport[:3000] + "\n\n(...) [Ucięto limit]"
+
+    embed = discord.Embed(title=f"📈 Trend: {final_kategoria}", description=raport, color=0x2ecc71)
     await status.edit(content=None, embed=embed)
 
 @bot.command()
@@ -183,7 +211,10 @@ async def gpsr(ctx, *, produkt: str = None):
     msg = await ctx.send("⚖️ Piszę GPSR (wzór tekstowy)...")
     tresc = await generuj_opis_gpsr(produkt)
     
-    # Wyświetlamy jako blok kodu 'text', żeby zachować surowy format bez formatowania Discorda
+    # LIMIT 3000
+    if len(tresc) > 3000: 
+        tresc = tresc[:3000] + "\n\n⚠️ [Tekst przycięty - limit Discorda]"
+
     embed = discord.Embed(description=f"```text\n{tresc}\n```", color=0x3498db)
     await msg.edit(content=None, embed=embed)
 
