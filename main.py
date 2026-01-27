@@ -20,6 +20,10 @@ ALLEGRO_CLIENT_ID = os.environ.get("ALLEGRO_CLIENT_ID")
 ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
+# --- TUTAJ WKLEJ ID SWOJEGO KANAŁU ---
+# (Pamiętaj, żeby nie było cudzysłowu "", same cyferki)
+TARGET_CHANNEL_ID = 1464959293681045658
+
 if not CLAUDE_KEY or not PERPLEXITY_KEY:
     print("⚠️ OSTRZEŻENIE: Brakuje kluczy AI!")
 if not ALLEGRO_CLIENT_ID:
@@ -95,7 +99,7 @@ async def allegro_monitor():
         orders = data["checkoutForms"]
         if not orders: return
 
-        # Sortujemy od najstarszego do najnowszego, żeby pingować po kolei
+        # Sortujemy od najstarszego do najnowszego
         orders.sort(key=lambda x: x["updatedAt"])
         
         # Jeśli to pierwsze uruchomienie, zapamiętujemy najnowsze i nie spamujemy
@@ -122,24 +126,24 @@ async def allegro_monitor():
                     qty = item["quantity"]
                     produkty_tekst += f"• {qty}x **{offer_title}**\n"
 
-                # Wysyłamy powiadomienie na PIERWSZY kanał tekstowy serwera
-                # (Warto ustawić konkretne ID kanału w przyszłości)
-                for guild in bot.guilds:
-                    if guild.text_channels:
-                        channel = guild.text_channels[0]
-                        
-                        embed = discord.Embed(title="💰 NOWE ZAMÓWIENIE!", color=0xf1c40f)
-                        embed.add_field(name="Kupujący", value=kupujacy, inline=True)
-                        embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
-                        embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
-                        embed.set_footer(text=f"ID: {last_order_id} | {datetime.datetime.now().strftime('%H:%M')}")
-                        
-                        await channel.send(content="@here Wpadła kasa! 💸", embed=embed)
+                # --- WYSYŁANIE NA KONKRETNY KANAŁ ---
+                channel = bot.get_channel(TARGET_CHANNEL_ID)
+                
+                if channel:
+                    embed = discord.Embed(title="💰 NOWE ZAMÓWIENIE!", color=0xf1c40f)
+                    embed.add_field(name="Kupujący", value=kupujacy, inline=True)
+                    embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
+                    embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
+                    embed.set_footer(text=f"ID: {last_order_id} | {datetime.datetime.now().strftime('%H:%M')}")
+                    
+                    await channel.send(content="@here Wpadła kasa! 💸", embed=embed)
+                else:
+                    print(f"❌ Błąd: Nie znaleziono kanału o ID {TARGET_CHANNEL_ID}. Sprawdź ID w kodzie!")
                         
     except Exception as e:
         print(f"Błąd w pętli Allegro: {e}")
 
-# --- LOGIKA AI (POZOSTAWIONA BEZ ZMIAN) ---
+# --- LOGIKA AI ---
 async def pobierz_analize_live(okres, kategoria):
     teraz = datetime.datetime.now().strftime("%d.%m.%Y")
     if kategoria.lower() in ["wszystko", "all", "ogólne", "top", "hity"]:
@@ -210,74 +214,4 @@ async def allegro_login(ctx):
     embed.description = (
         "1. Kliknij w link poniżej.\n"
         "2. Potwierdź logowanie na Allegro.\n"
-        "3. Zostaniesz przekierowany na stronę błędu (localhost) -> **TO NORMALNE**.\n"
-        "4. Skopiuj kod z paska adresu przeglądarki (wszystko po `code=`).\n"
-        "5. Wpisz tutaj: `!allegro_kod TWOJ_KOD`"
-    )
-    embed.add_field(name="🔗 Twój Link", value=f"[KLIKNIJ TUTAJ]({url})")
-    await ctx.send(embed=embed)
-
-@bot.command()
-async def allegro_kod(ctx, code: str = None):
-    """Wymienia kod na token"""
-    global allegro_token
-    if not code: return await ctx.send("❌ Podaj kod!")
-    
-    msg = await ctx.send("🔄 Łączę z Allegro...")
-    data = await get_allegro_token(code)
-    
-    if data and "access_token" in data:
-        allegro_token = data["access_token"]
-        await msg.edit(content=f"✅ **Sukces!** Połączono z kontem Allegro.\nTeraz będę sprawdzać zamówienia co 60 sekund.")
-    else:
-        await msg.edit(content=f"❌ Błąd logowania. Sprawdź czy kod jest poprawny (i świeży).")
-
-# --- Reszta komend bez zmian (hity, trend, gpsr, marza) ---
-@bot.command()
-async def hity(ctx, *, okres: str = None):
-    if not okres:
-        await ctx.send("📅 Podaj miesiąc:")
-        try:
-            msg = await bot.wait_for('message', check=lambda m: m.author == ctx.author and m.channel == ctx.channel, timeout=30)
-            okres = msg.content
-        except asyncio.TimeoutError: return await ctx.send("⏰ Czas minął.")
-    msg = await ctx.send(f"⏳ **Szukam hitów: {okres}...**")
-    raport = await pobierz_analize_live(okres, "Wszystko")
-    if len(raport) > 3000: raport = raport[:3000] + "..."
-    await msg.edit(content=None, embed=discord.Embed(title=f"🏆 Hity: {okres}", description=raport, color=0xe74c3c))
-
-@bot.command()
-async def trend(ctx, *, okres: str = None):
-    # Skrócona wersja dla oszczędności miejsca w poście
-    # (Tu wklej pełną logikę z poprzedniego kodu, nic się nie zmienia w logice AI)
-    await ctx.send("⏳ (Funkcja Trend działa tak samo jak wcześniej - wklej pełny kod jeśli potrzeba)")
-
-@bot.command()
-async def gpsr(ctx, *, produkt: str = None):
-    if not produkt: return await ctx.send("❌ Podaj produkt!")
-    msg = await ctx.send("⚖️ Piszę GPSR...")
-    tresc = await generuj_opis_gpsr(produkt)
-    if len(tresc) > 3000: tresc = tresc[:3000] + "..."
-    await msg.edit(content=None, embed=discord.Embed(description=f"```text\n{tresc}\n```", color=0x3498db))
-
-@bot.command()
-async def marza(ctx, arg1: str = None, arg2: str = None):
-    if not arg1: return await ctx.send("❌ Wpisz cenę.")
-    try:
-        zakup = float(arg1.replace(',', '.'))
-        zakup_netto = zakup / 1.23
-        if arg2 is None:
-            embed = discord.Embed(title=f"📊 Zakup: {zakup} zł", color=0x3498db)
-            for cel in [20, 30, 40, 50, 100]:
-                cena = ((zakup_netto + cel) / 0.97) * 1.23
-                embed.add_field(name=f"+{cel} zł", value=f"{cena:.2f} zł", inline=True)
-            await ctx.send(embed=embed)
-        else:
-            sprzedaz = float(arg2.replace(',', '.'))
-            zysk = (sprzedaz / 1.23 * 0.97) - zakup_netto
-            await ctx.send(embed=discord.Embed(title="Wynik", description=f"Zysk: **{zysk:.2f} zł**", color=0x2ecc71 if zysk > 0 else 0xe74c3c))
-    except: await ctx.send("❌ Błąd liczb.")
-
-if __name__ == "__main__":
-    keep_alive()
-    bot.run(TOKEN)
+        "3. Zostaniesz przekierowany na stronę błędu (
