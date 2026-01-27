@@ -72,7 +72,10 @@ def parsuj_liczbe(tekst):
     """Zamienia tekst na float, obsługuje przecinki i %"""
     if not tekst: return 0.0
     tekst = tekst.replace(',', '.').replace('%', '').strip()
-    return float(tekst)
+    try:
+        return float(tekst)
+    except ValueError:
+        return 0.0
 
 # --- LOGIKA ALLEGRO (API) ---
 async def get_allegro_token(auth_code):
@@ -100,7 +103,6 @@ async def fetch_orders():
 async def pobierz_wiadomosci():
     global allegro_token
     if not allegro_token: return None
-    # Pobieramy wątki, które są nieprzeczytane (limit 5 wystarczy)
     url = "https://api.allegro.pl/messaging/threads?limit=5" 
     headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
     
@@ -124,7 +126,6 @@ async def wyslij_odpowiedz(thread_id, text):
             return resp.status == 201
 
 async def oznacz_jako_przeczytane(thread_id, last_msg_id):
-    # To jest ważne, żeby bot nie odpisywał w kółko na to samo
     global allegro_token
     url = f"https://api.allegro.pl/messaging/threads/{thread_id}/read"
     headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json", "Content-Type": "application/vnd.allegro.public.v1+json"}
@@ -133,7 +134,7 @@ async def oznacz_jako_przeczytane(thread_id, last_msg_id):
         await session.put(url, headers=headers, json=payload)
 
 # --- PĘTLA AUTO-RESPONDERA ---
-@tasks.loop(minutes=3) # Sprawdza co 3 minuty
+@tasks.loop(minutes=3) 
 async def allegro_responder():
     global allegro_token, tryb_testowy, responder_active
     
@@ -144,17 +145,13 @@ async def allegro_responder():
         if not data or "threads" not in data: return
 
         for thread in data["threads"]:
-            # Sprawdzamy czy wątek jest nieprzeczytany
             if thread["read"] == False:
                 last_msg = thread["lastMessage"]
                 author_role = last_msg["author"]["role"]
                 thread_id = thread["id"]
                 
-                # BEZPIECZEŃSTWO: Odpisujemy TYLKO jeśli ostatni napisał KUPUJĄCY (BUYER)
                 if author_role == "BUYER":
-                    
                     if tryb_testowy:
-                        # --- TRYB TESTOWY (TYLKO DISCORD) ---
                         channel = bot.get_channel(TARGET_CHANNEL_ID)
                         if channel:
                             embed = discord.Embed(title="🛡️ AUTO-RESPONDER (TEST)", color=0x3498db)
@@ -164,14 +161,10 @@ async def allegro_responder():
                         pass 
                     
                     else:
-                        # --- TRYB LIVE (PRAWDZIWE WYSYŁANIE) ---
                         sukces = await wyslij_odpowiedz(thread_id, AUTO_REPLY_MSG)
                         if sukces:
                             print(f"✅ Odpisano automatycznie do wątku {thread_id}")
-                            # Oznaczamy jako przeczytane, żeby nie odpisać 2 razy
                             await oznacz_jako_przeczytane(thread_id, last_msg["id"])
-                            
-                            # Info na Discord
                             channel = bot.get_channel(TARGET_CHANNEL_ID)
                             if channel:
                                 await channel.send(f"🤖 **Auto-Reply wysłane!** Odpisałem klientowi na wiadomość.")
@@ -255,8 +248,7 @@ async def pomoc(ctx):
     embed = discord.Embed(title="🛠️ Menu Bota", color=0xff9900)
     embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`", inline=False)
     embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg` (Symulacja)", inline=False)
-    # ZAKTUALIZOWANA POMOC
-    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup] [sprzedaz]`\n`!trend`\n`!gpsr`", inline=False)
+    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup]` -> Sugerowane ceny\n`!marza [zakup] [sprzedaz]` -> Oblicz zysk\n`!trend`\n`!gpsr`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -309,59 +301,69 @@ async def allegro_kod(ctx, code: str = None):
     else:
         await msg.edit(content="❌ Błąd logowania.")
 
-# --- ZAKTUALIZOWANA FUNKCJA MARŻY (BEZ PROWIZJI) ---
+# --- NAPRAWIONA FUNKCJA MARŻY ---
 @bot.command()
-async def marza(ctx, arg1: str = None, arg2: str = None):
+async def marza(ctx, *args):
     """
-    Kalkulator Zysku dla FIRMY (VAT 23% + Ryczałt 3%).
-    Bez prowizji Allegro (zgodnie z prośbą).
-    Użycie: !marza [cena_zakupu] [cena_sprzedazy]
+    1 argument (!marza 100) -> Wyświetla sugerowane ceny sprzedaży dla zysku 10/20/30/50/100 zł
+    2 argumenty (!marza 100 150) -> Oblicza dokładny zysk dla tej transakcji
     """
     await ctx.message.delete()
     
-    # Jeśli brakuje argumentów, wyświetl błąd
-    if not arg1 or not arg2:
-        return await ctx.send("❌ Użyj: `!marza [zakup] [sprzedaz]` (Ceny brutto)")
-    
+    if len(args) == 0:
+        return await ctx.send("❌ Użyj: `!marza [zakup]` LUB `!marza [zakup] [sprzedaz]`")
+
     try:
-        # Parsowanie liczb (zamiana , na .)
-        zakup_brutto = parsuj_liczbe(arg1)
-        sprzedaz_brutto = parsuj_liczbe(arg2)
-        
-        # 1. Obliczenie Netto (odliczenie VAT 23%)
+        # Parsowanie pierwszego argumentu (ZAKUP)
+        zakup_brutto = parsuj_liczbe(args[0])
         zakup_netto = zakup_brutto / 1.23
-        sprzedaz_netto = sprzedaz_brutto / 1.23
-        
-        # 2. Obliczenie Ryczałtu (3% od przychodu netto)
-        ryczalt = sprzedaz_netto * 0.03
-        
-        # 3. Zysk na czysto (bez prowizji Allegro)
-        zysk_na_czysto = sprzedaz_netto - zakup_netto - ryczalt
-        
-        # Kolory: Zielony jak zarabiasz, Czerwony jak tracisz
-        kolor = 0x2ecc71 if zysk_na_czysto > 0 else 0xe74c3c
-        
-        embed = discord.Embed(title="📊 Wynik (Firma VAT + Ryczałt)", color=kolor)
-        embed.add_field(name="Zakup (Brutto)", value=f"{zakup_brutto:.2f} zł", inline=True)
-        embed.add_field(name="Sprzedaż (Brutto)", value=f"{sprzedaz_brutto:.2f} zł", inline=True)
-        
-        # Pusta linia dla estetyki
-        embed.add_field(name="\u200b", value="\u200b", inline=False)
-        
-        details = (
-            f"💰 Sprzedaż Netto: {sprzedaz_netto:.2f} zł\n"
-            f"🛒 Zakup Netto: -{zakup_netto:.2f} zł\n"
-            f"🏛️ Podatek Ryczałt (3%): -{ryczalt:.2f} zł\n"
-            f"⚠️ *Prowizja Allegro: Nie wliczona*"
-        )
-        
-        embed.add_field(name="Rozliczenie", value=details, inline=False)
-        embed.add_field(name="ZYSK NA CZYSTO", value=f"💸 **{zysk_na_czysto:.2f} zł**", inline=False)
-        
-        await ctx.send(embed=embed)
+
+        # --- OPCJA 1: TYLKO CENA ZAKUPU (Sugerowane ceny) ---
+        if len(args) == 1:
+            cele_zysku = [10, 20, 30, 50, 100]
+            embed = discord.Embed(title=f"🛒 Zakup: {zakup_brutto:.2f} zł brutto", color=0x3498db)
+            embed.description = "Sugerowane ceny sprzedaży (aby uzyskać zysk na rękę):"
+            
+            tekst_sugestii = ""
+            for cel in cele_zysku:
+                # Wzór: Zysk = SprzedażNetto * (1 - ryczałt) - ZakupNetto
+                # SprzedażNetto = (Zysk + ZakupNetto) / (1 - ryczałt)
+                sprzedaz_netto_wymagana = (cel + zakup_netto) / 0.97
+                sprzedaz_brutto_wymagana = sprzedaz_netto_wymagana * 1.23
+                
+                tekst_sugestii += f"**Zysk {cel} zł** → Sprzedaj za: **{sprzedaz_brutto_wymagana:.2f} zł**\n"
+            
+            embed.add_field(name="Kalkulacja (VAT 23% + Ryczałt 3%)", value=tekst_sugestii, inline=False)
+            embed.set_footer(text="Prowizja Allegro nie wliczona (zależy od kategorii).")
+            await ctx.send(embed=embed)
+
+        # --- OPCJA 2: ZAKUP I SPRZEDAŻ (Obliczenie zysku) ---
+        elif len(args) >= 2:
+            sprzedaz_brutto = parsuj_liczbe(args[1])
+            sprzedaz_netto = sprzedaz_brutto / 1.23
+            
+            # Podatki
+            ryczalt = sprzedaz_netto * 0.03
+            
+            # Zysk na czysto
+            zysk = sprzedaz_netto - zakup_netto - ryczałt
+            
+            kolor = 0x2ecc71 if zysk > 0 else 0xe74c3c
+            embed = discord.Embed(title="📊 Wynik Transakcji", color=kolor)
+            embed.add_field(name="Zakup", value=f"{zakup_brutto:.2f} zł", inline=True)
+            embed.add_field(name="Sprzedaż", value=f"{sprzedaz_brutto:.2f} zł", inline=True)
+            
+            szczegoly = (
+                f"Obroty Netto: {sprzedaz_netto:.2f} zł\n"
+                f"Koszt Netto: -{zakup_netto:.2f} zł\n"
+                f"Podatek (3%): -{ryczalt:.2f} zł\n"
+            )
+            embed.add_field(name="Rozliczenie", value=szczegoly, inline=False)
+            embed.add_field(name="ZYSK NA CZYSTO", value=f"💰 **{zysk:.2f} zł**", inline=False)
+            await ctx.send(embed=embed)
 
     except Exception as e:
-        await ctx.send(f"❌ Błąd: {e}. Upewnij się, że wpisujesz liczby, np. `!marza 50 100`")
+        await ctx.send(f"❌ Błąd obliczeń: {e}")
 
 # --- RESZTA KOMEND ---
 
