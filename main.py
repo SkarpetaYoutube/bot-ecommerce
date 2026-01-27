@@ -68,6 +68,12 @@ def czy_swieze_zamowienie(data_str):
         print(f"⚠️ Błąd daty: {e}")
         return True 
 
+def parsuj_liczbe(tekst):
+    """Zamienia tekst na float, obsługuje przecinki i %"""
+    if not tekst: return 0.0
+    tekst = tekst.replace(',', '.').replace('%', '').strip()
+    return float(tekst)
+
 # --- LOGIKA ALLEGRO (API) ---
 async def get_allegro_token(auth_code):
     auth_str = f"{ALLEGRO_CLIENT_ID}:{ALLEGRO_CLIENT_SECRET}"
@@ -249,7 +255,7 @@ async def pomoc(ctx):
     embed = discord.Embed(title="🛠️ Menu Bota", color=0xff9900)
     embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`", inline=False)
     embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg` (Symulacja)", inline=False)
-    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup] [prowizja]` - Wylicz ceny\n`!marza [zakup] [sprzedaz] [prowizja]` - Sprawdź zysk\n`!trend` - Badanie rynku\n`!gpsr` - Teksty prawne", inline=False)
+    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup] [prowizja]`\n`!marza [zakup] [sprzedaz] [prowizja]`\n`!trend`\n`!gpsr`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -302,68 +308,85 @@ async def allegro_kod(ctx, code: str = None):
     else:
         await msg.edit(content="❌ Błąd logowania.")
 
-# --- NOWA LOGIKA MARŻY (VAT 23% + Ryczałt 3%) ---
+# --- NAPRAWIONA LOGIKA MARŻY ---
 
 @bot.command()
 async def marza(ctx, arg1: str = None, arg2: str = None, arg3: str = None):
     """
-    Kalkulator marży dla VAT-owca na ryczałcie 3%.
-    Użycie:
-    1. !marza [zakup] [prowizja_%] -> Pokaże tabelę cen.
-    2. !marza [zakup] [sprzedaz] [prowizja_%] -> Obliczy dokładny zysk.
+    Kalkulator marży (VAT 23% + Ryczałt 3%).
+    Wersja poprawiona - obsługuje przecinki i błędy formatowania.
     """
     await ctx.message.delete()
     if not arg1 or not arg2:
-        return await ctx.send("❌ Błąd. Użyj: `!marza [zakup] [prowizja]` LUB `!marza [zakup] [sprzedaz] [prowizja]`")
+        return await ctx.send("❌ Użyj: `!marza [zakup] [prowizja]` LUB `!marza [zakup] [sprzedaz] [prowizja]`")
     
     try:
-        zakup_brutto = float(arg1.replace(',', '.'))
+        # Parsowanie danych wejściowych
+        zakup_brutto = parsuj_liczbe(arg1)
         zakup_netto = zakup_brutto / 1.23
         
-        # Wariant 1: !marza [zakup] [prowizja] -> Tabela sugerowanych cen
-        # Jeśli arg2 jest mały (np. < 50), traktujemy go jako % prowizji, a nie cenę sprzedaży.
-        # Chyba że podano 3 argumenty - wtedy wchodzimy w wariant 2.
-        
+        # Sprawdzamy, czy to tryb tabeli (2 argumenty) czy pełny (3 argumenty)
         is_table_mode = (arg3 is None)
         
         if is_table_mode:
-            prowizja_proc = float(arg2.replace(',', '.')) / 100.0
+            # ARG2 to Prowizja
+            raw_prowizja = parsuj_liczbe(arg2)
             
+            # Zabezpieczenie: jeśli ktoś wpisze 50 (jako 50%), to OK. Jeśli 0.5 (jako 50%), też OK.
+            if raw_prowizja > 1:
+                prowizja_proc = raw_prowizja / 100.0
+            else:
+                prowizja_proc = raw_prowizja
+
+            # Zabezpieczenie przed absurdem (np. 144%)
+            if prowizja_proc > 0.50:
+                return await ctx.send(f"⚠️ **Błąd:** Prowizja {prowizja_proc*100:.1f}% wydaje się za duża. Sprawdź, czy nie wpisałeś ceny w złe miejsce.")
+
             embed = discord.Embed(title=f"📊 Kalkulacja (VAT + Ryczałt 3%)", color=0x3498db)
-            embed.description = f"Zakup: **{zakup_brutto} zł**. Prowizja Allegro: **{prowizja_proc*100:.1f}%**"
+            embed.description = f"Zakup: **{zakup_brutto} zł**. Prowizja: **{prowizja_proc*100:.1f}%**"
             
             for cel in [10, 20, 30, 50, 100]:
-                # Wzór odwrócony:
-                # Cena Brutto = (Zysk_Cel * 1.23 + Zakup_Brutto) / (0.97 - Prowizja)
-                # Wyjaśnienie: 0.97 to (1 - 0.03 ryczałtu).
-                
+                # Wzór: Cena Brutto = (Zysk_Cel * 1.23 + Zakup_Brutto) / (0.97 - Prowizja)
                 mianownik = 0.97 - prowizja_proc
+                
                 if mianownik <= 0:
-                    cena_brutto = 0 # Zabezpieczenie przed dzieleniem przez zero/minus
+                    cena_brutto = 999999 # Zabezpieczenie
+                    warn = "(Prowizja zjada cały zysk!)"
                 else:
                     cena_brutto = (cel * 1.23 + zakup_brutto) / mianownik
+                    warn = ""
 
-                embed.add_field(name=f"Zysk {cel} zł", value=f"Sprzedaj za: **{cena_brutto:.2f} zł**", inline=True)
+                if warn:
+                    val = f"⚠️ Nieopłacalne {warn}"
+                else:
+                    val = f"Sprzedaj za: **{cena_brutto:.2f} zł**"
+                
+                embed.add_field(name=f"Zysk {cel} zł", value=val, inline=True)
             
             embed.set_footer(text="Ceny uwzględniają: VAT 23% (odliczony), Prowizję i Ryczałt 3%.")
             await ctx.send(embed=embed)
             
         else:
-            # Wariant 2: !marza [zakup] [sprzedaz] [prowizja]
-            sprzedaz_brutto = float(arg2.replace(',', '.'))
-            prowizja_proc = float(arg3.replace(',', '.')) / 100.0
+            # ARG2 to Sprzedaż, ARG3 to Prowizja
+            sprzedaz_brutto = parsuj_liczbe(arg2)
+            raw_prowizja = parsuj_liczbe(arg3)
             
+            if raw_prowizja > 1:
+                prowizja_proc = raw_prowizja / 100.0
+            else:
+                prowizja_proc = raw_prowizja
+
             sprzedaz_netto = sprzedaz_brutto / 1.23
             
             # Koszty
             prowizja_allegro_netto = (sprzedaz_brutto * prowizja_proc) / 1.23
-            ryczalt = sprzedaz_netto * 0.03 # Ryczałt 3% od przychodu netto
+            ryczalt = sprzedaz_netto * 0.03 # Ryczałt 3%
             
             zysk_na_czysto = sprzedaz_netto - zakup_netto - prowizja_allegro_netto - ryczalt
             
             kolor = 0x2ecc71 if zysk_na_czysto > 0 else 0xe74c3c
             
-            embed = discord.Embed(title="Wynik Transakcji (VAT + Ryczałt)", color=kolor)
+            embed = discord.Embed(title="Wynik Transakcji", color=kolor)
             embed.add_field(name="1. Zakup", value=f"{zakup_brutto:.2f} zł", inline=True)
             embed.add_field(name="2. Sprzedaż", value=f"{sprzedaz_brutto:.2f} zł", inline=True)
             embed.add_field(name="3. Prowizja", value=f"{prowizja_proc*100:.1f}%", inline=True)
@@ -382,7 +405,7 @@ async def marza(ctx, arg1: str = None, arg2: str = None, arg3: str = None):
             await ctx.send(embed=embed)
 
     except Exception as e:
-        await ctx.send(f"❌ Błąd: {e}\nUżyj: `!marza 100 200 10` (Kupno, Sprzedaż, Prowizja%)")
+        await ctx.send(f"❌ Coś poszło nie tak: {e}\nSpróbuj: `!marza 100 15` (dla 15% prowizji)")
 
 # --- RESZTA KOMEND ---
 
