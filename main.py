@@ -63,7 +63,8 @@ def czy_swieze_zamowienie(data_str):
         data_zamowienia = datetime.datetime.fromisoformat(data_str.replace('Z', '+00:00'))
         teraz_utc = datetime.datetime.now(datetime.timezone.utc)
         roznica = teraz_utc - data_zamowienia
-        return roznica.total_seconds() < 1200
+        # ZMIANA: Wydłużono czas do 3600 sekund (1h) na wypadek restartu bota
+        return roznica.total_seconds() < 3600
     except Exception as e:
         print(f"⚠️ Błąd daty: {e}")
         return True 
@@ -184,32 +185,53 @@ async def allegro_responder():
     except Exception as e:
         print(f"Błąd Respondera: {e}")
 
-# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA ---
+# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA (POPRAWIONA) ---
 @tasks.loop(seconds=60)
 async def allegro_monitor():
     global last_order_id, allegro_token
-    if not allegro_token: return 
+    
+    if not allegro_token:
+        # Bot nie ma tokena, nic nie robimy
+        return 
+
     try:
         data = await fetch_orders()
         if not data or "checkoutForms" not in data: return
+        
         orders = data["checkoutForms"]
         if not orders: return
+        
+        # Sortujemy od najstarszego, żeby przetwarzać chronologicznie
         orders.sort(key=lambda x: x["updatedAt"])
+        
+        # --- ZMIANA: INICJALIZACJA ---
+        # Jeśli bot startuje, ustawiamy ID na "prawie ostatnie", żeby ostatnie zamówienie też zostało sprawdzone
         if last_order_id is None:
-            last_order_id = orders[-1]["id"]
-            print(f"✅ Baza zamówień ustawiona na ID: {last_order_id}")
-            return
+            if len(orders) > 1:
+                last_order_id = orders[-2]["id"] # Bierzemy przedostatnie
+            else:
+                last_order_id = "0" # Albo zero, jeśli jest tylko jedno
+            print(f"✅ (Re)start bota. Ustawiono bazę, sprawdzam nowe zamówienia...")
+            # USUNIĘTO 'return', żeby kod leciał dalej!
+
         for order in orders:
-            if order["id"] > last_order_id:
+            # Porównujemy jako stringi (ID w Allegro to UUID/String)
+            if str(order["id"]) > str(last_order_id):
                 last_order_id = order["id"] 
+                
+                # Sprawdzamy czy zamówienie jest w miarę świeże (teraz 60 min)
                 if not czy_swieze_zamowienie(order["updatedAt"]):
                     continue 
+                
                 kupujacy = order["buyer"]["login"]
                 kwota = order["summary"]["totalToPay"]["amount"]
                 waluta = order["summary"]["totalToPay"]["currency"]
+                
                 produkty_tekst = ""
                 for item in order["lineItems"]:
-                    produkty_tekst += f"• {item['quantity']}x **{item['offer']['name']}**\n"
+                    nazwa_oferty = item['offer']['name']
+                    if len(nazwa_oferty) > 45: nazwa_oferty = nazwa_oferty[:45] + "..."
+                    produkty_tekst += f"• {item['quantity']}x **{nazwa_oferty}**\n"
                 
                 channel = bot.get_channel(KANAL_ZAMOWIENIA_ID)
                 if channel:
@@ -219,6 +241,8 @@ async def allegro_monitor():
                     embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
                     embed.set_footer(text=f"ID: {last_order_id} | {polski_czas()}")
                     await channel.send(content="@here Wpadła kasa! 💸", embed=embed)
+                    print(f"✅ Wysłano powiadomienie o zamówieniu {last_order_id}")
+
     except Exception as e:
         print(f"Błąd w pętli Allegro: {e}")
 
@@ -265,10 +289,17 @@ async def on_ready():
 async def pomoc(ctx):
     await ctx.message.delete()
     embed = discord.Embed(title="🛠️ Menu Bota", color=0xff9900)
-    embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`", inline=False)
-    embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg`", inline=False)
+    embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`\n`!status`", inline=False)
+    embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`", inline=False)
     embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup]`\n`!marza [zakup] [sprzedaz] [prowizja]`\n`!trend`\n`!gpsr`", inline=False)
     await ctx.send(embed=embed)
+
+@bot.command()
+async def status(ctx):
+    # Nowa komenda do sprawdzania połączenia
+    token_status = "✅ POŁĄCZONY" if allegro_token else "❌ ROZŁĄCZONY (Wpisz !allegro_login)"
+    id_status = last_order_id if last_order_id else "Brak danych"
+    await ctx.send(f"🤖 **Status Bota:**\nAllegro Token: {token_status}\nOstatnie ID zamówienia: {id_status}")
 
 @bot.command()
 async def auto_start(ctx):
@@ -320,7 +351,6 @@ async def allegro_kod(ctx, code: str = None):
     else:
         await msg.edit(content="❌ Błąd logowania.")
 
-# <--- TUTAJA WSTAWIŁEM NOWĄ KOMENDĘ --->
 @bot.command()
 async def ostatnie(ctx):
     await ctx.message.delete()
