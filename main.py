@@ -261,6 +261,7 @@ async def allegro_monitor():
 
 # --- PĘTLA TRACKERA (Śledzenie wzrostów sprzedaży) ---
 # --- PĘTLA TRACKERA (Śledzenie wzrostów sprzedaży) ---
+# --- PĘTLA TRACKERA (Śledzenie wzrostów sprzedaży) ---
 @tasks.loop(minutes=30)
 async def allegro_tracker():
     global sledzone_oferty, allegro_token
@@ -272,7 +273,7 @@ async def allegro_tracker():
         do_usuniecia = []
 
         for oferta_id, stara_ilosc in sledzone_oferty.items():
-            # ZMIANA ENDPOINTU NA PUBLICZNY (LISTING)
+            # ZMIANA: Używamy endpointu publicznego (listing) zamiast prywatnego (sale/offers)
             url = f"https://api.allegro.pl/offers/listing?offer.id={oferta_id}"
             headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
             
@@ -281,19 +282,19 @@ async def allegro_tracker():
                     if resp.status == 200:
                         data = await resp.json()
                         
-                        # Szukamy oferty w wynikach (może być w 'regular' lub 'promoted')
+                        # Pobieramy ofertę z wyników wyszukiwania (może być w regular lub promoted)
                         items = data.get("items", {})
-                        oferta = None
+                        znaleziona_oferta = None
                         
-                        # Sprawdzamy listę zwykłą i promowaną
-                        wszystkie_oferty = items.get("regular", []) + items.get("promoted", [])
-                        if wszystkie_oferty:
-                            oferta = wszystkie_oferty[0] # Bierzemy pierwszą (powinna być jedyna bo szukamy po ID)
+                        # Sprawdzamy obie listy
+                        lista_ofert = items.get("regular", []) + items.get("promoted", [])
+                        if lista_ofert:
+                            znaleziona_oferta = lista_ofert[0] # Bierzemy pierwszą (szukamy po ID, więc będzie jedna)
 
-                        if oferta:
-                            # Popularity to liczba kupujących/sprzedanych sztuk w API publicznym
-                            aktualna_ilosc = int(oferta.get("sellingMode", {}).get("popularity", 0))
-                            tytul = oferta.get("name", "Nieznana oferta")
+                        if znaleziona_oferta:
+                            # W publicznym API "popularity" to liczba sprzedanych/zainteresowania
+                            aktualna_ilosc = int(znaleziona_oferta.get("sellingMode", {}).get("popularity", 0))
+                            tytul = znaleziona_oferta.get("name", "Nieznana oferta")
                             
                             roznica = aktualna_ilosc - stara_ilosc
                             
@@ -304,19 +305,15 @@ async def allegro_tracker():
                                     embed.add_field(name="Produkt", value=f"[{tytul}](https://allegro.pl/oferta/{oferta_id})", inline=False)
                                     embed.add_field(name="Wzrost", value=f"🚀 **+{roznica} szt.**", inline=True)
                                     embed.add_field(name="Łącznie sprzedano", value=f"{aktualna_ilosc} szt.", inline=True)
-                                    # 
                                     await channel.send(embed=embed)
                                 
                                 sledzone_oferty[oferta_id] = aktualna_ilosc
                                 print(f"🔥 Wzrost na ofercie {oferta_id}: +{roznica}")
                         else:
-                             print(f"⚠️ Nie znaleziono danych dla ID {oferta_id} w Listingu")
+                             print(f"⚠️ Nie znaleziono danych dla ID {oferta_id} w publicznym listingu")
                     
                     elif resp.status == 404:
                         do_usuniecia.append(oferta_id)
-                    else:
-                        # Tutaj podglądamy błąd jeśli inny niż 404
-                        print(f"⚠️ Błąd Trackera {resp.status} dla {oferta_id}")
 
         for id_us in do_usuniecia:
             del sledzone_oferty[id_us]
@@ -627,7 +624,7 @@ async def tracker(ctx, link: str = None):
 
     msg = await ctx.send("🔍 Sprawdzam ofertę (Public API)...")
 
-    # ZMIANA NA LISTING (Publiczny)
+    # ZMIANA NA LISTING (Publiczny) - to omija błąd 403 dla cudzych ofert
     url = f"https://api.allegro.pl/offers/listing?offer.id={oferta_id}"
     headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
     
@@ -638,10 +635,11 @@ async def tracker(ctx, link: str = None):
                 
                 # Logika wyciągania z listingu
                 items = data.get("items", {})
-                wszystkie_oferty = items.get("regular", []) + items.get("promoted", [])
+                lista_ofert = items.get("regular", []) + items.get("promoted", [])
                 
-                if wszystkie_oferty:
-                    oferta = wszystkie_oferty[0]
+                if lista_ofert:
+                    oferta = lista_ofert[0]
+                    # Popularity = sprzedane sztuki (w przybliżeniu Allegro)
                     sprzedane_total = int(oferta.get("sellingMode", {}).get("popularity", 0))
                     nazwa = oferta.get("name")
                     cena = oferta.get("sellingMode", {}).get("price", {}).get("amount", "???")
@@ -657,24 +655,13 @@ async def tracker(ctx, link: str = None):
                     await msg.edit(content="❌ Nie znaleziono takiej oferty w API publicznym.")
             else:
                 tekst_bledu = await resp.text()
-                print(f"BŁĄD API: {tekst_bledu}") # To nam pokaże w konsoli co jest nie tak
+                print(f"BŁĄD API: {tekst_bledu}") 
                 await msg.edit(content=f"❌ Błąd API Allegro: {resp.status}")
-
-@bot.command()
-async def lista_tracker(ctx):
-    if not sledzone_oferty:
-        return await ctx.send("📭 Tracker jest pusty.")
-    
-    opis = ""
-    for oid, ilosc in sledzone_oferty.items():
-        opis += f"• ID: `{oid}` | Sprzedano: **{ilosc}**\n"
-        
-    embed = discord.Embed(title="📋 Śledzone oferty", description=opis, color=0x3498db)
-    await ctx.send(embed=embed)
 
 # --- START BOTA ---
 keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
 bot.run(TOKEN)
+
 
 
 
