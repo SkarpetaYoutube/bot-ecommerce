@@ -37,8 +37,9 @@ claude_client = AsyncAnthropic(api_key=CLAUDE_KEY)
 perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.perplexity.ai")
 
 # Zmienne globalne
+# Zmienne globalne
 allegro_token = None
-last_order_id = None
+processed_order_ids = set()  # <--- NOWA ZMIENNA: Zbiór obsłużonych ID
 processed_msg_ids = set()
 tryb_testowy = True
 responder_active = False
@@ -186,12 +187,12 @@ async def allegro_responder():
         print(f"Błąd Respondera: {e}")
 
 # --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA (POPRAWIONA) ---
+# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA (POPRAWIONA v2) ---
 @tasks.loop(seconds=60)
 async def allegro_monitor():
-    global last_order_id, allegro_token
+    global processed_order_ids, allegro_token
     
     if not allegro_token:
-        # Bot nie ma tokena, nic nie robimy
         return 
 
     try:
@@ -204,44 +205,56 @@ async def allegro_monitor():
         # Sortujemy od najstarszego, żeby przetwarzać chronologicznie
         orders.sort(key=lambda x: x["updatedAt"])
         
-        # --- ZMIANA: INICJALIZACJA ---
-        # Jeśli bot startuje, ustawiamy ID na "prawie ostatnie", żeby ostatnie zamówienie też zostało sprawdzone
-        if last_order_id is None:
-            if len(orders) > 1:
-                last_order_id = orders[-2]["id"] # Bierzemy przedostatnie
-            else:
-                last_order_id = "0" # Albo zero, jeśli jest tylko jedno
-            print(f"✅ (Re)start bota. Ustawiono bazę, sprawdzam nowe zamówienia...")
-            # USUNIĘTO 'return', żeby kod leciał dalej!
+        # --- INICJALIZACJA PO RESTARCIE ---
+        # Jeśli zbiór jest pusty (bot dopiero wstał), dodajemy obecne zamówienia do pamięci,
+        # żeby nie spamował starymi, ALE przepuszczamy te bardzo świeże (np. z ostatnich 5 min).
+        if not processed_order_ids:
+            print("⚙️ Inicjalizacja bazy zamówień...")
+            for order in orders:
+                processed_order_ids.add(order["id"])
+            # Po pierwszym przebiegu kończymy, żeby nie wysłać powiadomień o starych
+            # (Chyba że chcesz, aby po restarcie wysłał ostatnie - wtedy usuń 'return' poniżej)
+            return 
 
         for order in orders:
-            # Porównujemy jako stringi (ID w Allegro to UUID/String)
-            if str(order["id"]) > str(last_order_id):
-                last_order_id = order["id"] 
+            order_id = order["id"]
+
+            # SPRAWDZENIE: Czy już to widzieliśmy? (Zamiast > porównujemy obecność w zbiorze)
+            if order_id in processed_order_ids:
+                continue # Już było, pomijamy
+            
+            # Jeśli nie było, dodajemy do bazy "widzianych"
+            processed_order_ids.add(order_id)
+            
+            # Czyścimy pamięć, żeby nie urosła w nieskończoność (trzymamy ostatnie 100)
+            if len(processed_order_ids) > 100:
+                processed_order_ids.pop()
+
+            # Sprawdzamy czy zamówienie jest świeże czasowo
+            if not czy_swieze_zamowienie(order["updatedAt"]):
+                continue 
+            
+            # --- TWORZENIE POWIADOMIENIA ---
+            kupujacy = order["buyer"]["login"]
+            kwota = order["summary"]["totalToPay"]["amount"]
+            waluta = order["summary"]["totalToPay"]["currency"]
+            
+            produkty_tekst = ""
+            for item in order["lineItems"]:
+                nazwa_oferty = item['offer']['name']
+                if len(nazwa_oferty) > 45: nazwa_oferty = nazwa_oferty[:45] + "..."
+                produkty_tekst += f"• {item['quantity']}x **{nazwa_oferty}**\n"
+            
+            channel = bot.get_channel(KANAL_ZAMOWIENIA_ID)
+            if channel:
+                embed = discord.Embed(title="💰 NOWE ZAMÓWIENIE!", color=0xf1c40f)
+                embed.add_field(name="Kupujący", value=kupujacy, inline=True)
+                embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
+                embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
+                embed.set_footer(text=f"ID: {order_id} | {polski_czas()}")
                 
-                # Sprawdzamy czy zamówienie jest w miarę świeże (teraz 60 min)
-                if not czy_swieze_zamowienie(order["updatedAt"]):
-                    continue 
-                
-                kupujacy = order["buyer"]["login"]
-                kwota = order["summary"]["totalToPay"]["amount"]
-                waluta = order["summary"]["totalToPay"]["currency"]
-                
-                produkty_tekst = ""
-                for item in order["lineItems"]:
-                    nazwa_oferty = item['offer']['name']
-                    if len(nazwa_oferty) > 45: nazwa_oferty = nazwa_oferty[:45] + "..."
-                    produkty_tekst += f"• {item['quantity']}x **{nazwa_oferty}**\n"
-                
-                channel = bot.get_channel(KANAL_ZAMOWIENIA_ID)
-                if channel:
-                    embed = discord.Embed(title="💰 NOWE ZAMÓWIENIE!", color=0xf1c40f)
-                    embed.add_field(name="Kupujący", value=kupujacy, inline=True)
-                    embed.add_field(name="Kwota", value=f"**{kwota} {waluta}**", inline=True)
-                    embed.add_field(name="📦 Produkty", value=produkty_tekst, inline=False)
-                    embed.set_footer(text=f"ID: {last_order_id} | {polski_czas()}")
-                    await channel.send(content="@here Wpadła kasa! 💸", embed=embed)
-                    print(f"✅ Wysłano powiadomienie o zamówieniu {last_order_id}")
+                await channel.send(content="@here Wpadła kasa! 💸", embed=embed)
+                print(f"✅ Wysłano powiadomienie o zamówieniu {order_id}")
 
     except Exception as e:
         print(f"Błąd w pętli Allegro: {e}")
@@ -296,10 +309,9 @@ async def pomoc(ctx):
 
 @bot.command()
 async def status(ctx):
-    # Nowa komenda do sprawdzania połączenia
-    token_status = "✅ POŁĄCZONY" if allegro_token else "❌ ROZŁĄCZONY (Wpisz !allegro_login)"
-    id_status = last_order_id if last_order_id else "Brak danych"
-    await ctx.send(f"🤖 **Status Bota:**\nAllegro Token: {token_status}\nOstatnie ID zamówienia: {id_status}")
+    token_status = "✅ POŁĄCZONY" if allegro_token else "❌ ROZŁĄCZONY"
+    ilosc_w_pamieci = len(processed_order_ids)
+    await ctx.send(f"🤖 **Status Bota:**\nAllegro Token: {token_status}\nZamówień w pamięci podręcznej: {ilosc_w_pamieci}")
 
 @bot.command()
 async def auto_start(ctx):
@@ -572,3 +584,4 @@ async def gpsr(ctx, *, produkt: str = None):
 # --- START BOTA ---
 keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
 bot.run(TOKEN)
+
