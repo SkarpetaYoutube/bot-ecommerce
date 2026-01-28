@@ -224,10 +224,29 @@ async def allegro_monitor():
 
 # --- AI HELPERS ---
 async def generuj_opis_gpsr(produkt):
-    prompt = f"Napisz tekst GPSR dla: {produkt}. Struktura: 1. Bezpieczeństwo, 2. Dzieci, 3. Utylizacja."
+    # Nowy, profesjonalny prompt wzorowany na przykładzie nagrzewnicy
+    prompt = (
+        f"Jesteś specjalistą ds. bezpieczeństwa produktów (Compliance Officer). "
+        f"Napisz profesjonalną instrukcję bezpieczeństwa GPSR dla produktu: {produkt}. "
+        f"Tekst ma być surowy, bez pogrubień markdown (**), gotowy do wklejenia w dokument.\n\n"
+        f"Zachowaj DOKŁADNIE ten schemat sekcji:\n"
+        f"1. Informacje dotyczące bezpieczeństwa produktu – {produkt} (Opis przeznaczenia, informacja że to nie zabawka)\n"
+        f"2. Bezpieczeństwo użytkowania (Zasady ogólne, zapoznanie z instrukcją)\n"
+        f"3. Ryzyka specyficzne (Dopasuj do produktu: np. Ryzyko poparzeń, Zasilanie, Stabilność, Ryzyko zadławienia - zależnie co to jest)\n"
+        f"4. Użytkowanie i konserwacja\n"
+        f"5. Przechowywanie\n"
+        f"6. Informacje dodatkowe (Opakowanie, utylizacja, kontakt w razie awarii)\n\n"
+        f"Styl: Formalny, nakazowy, krótki i konkretny. Używaj myślników jako punktorów."
+    )
+    
     try:
         if not CLAUDE_KEY: return "❌ Brak klucza Claude."
-        msg = await claude_client.messages.create(model="claude-3-haiku-20240307", max_tokens=2500, messages=[{"role": "user", "content": prompt}])
+        # Zmienilem model na haiku (szybszy) lub sonnet (dokladniejszy) - zostawiam haiku dla szybkosci
+        msg = await claude_client.messages.create(
+            model="claude-3-haiku-20240307", 
+            max_tokens=3000, 
+            messages=[{"role": "user", "content": prompt}]
+        )
         return msg.content[0].text
     except Exception as e: return f"Błąd: {e}"
 
@@ -442,13 +461,32 @@ async def trend(ctx, *, okres: str = None):
 
 @bot.command()
 async def gpsr(ctx, *, produkt: str = None):
-    if not produkt: return await ctx.send("❌ Podaj nazwę produktu, np. `!gpsr Latarka LED`")
-    msg = await ctx.send(f"✍️ Piszę GPSR dla: **{produkt}**...")
+    if not produkt: 
+        return await ctx.send("❌ Podaj nazwę produktu, np. `!gpsr Fotelik samochodowy`")
+    
+    msg = await ctx.send(f"✍️ **Generuję profesjonalny GPSR dla:** `{produkt}`...\nTo może chwilę potrwać.")
+    
     opis = await generuj_opis_gpsr(produkt)
-    if len(opis) > 4000: opis = opis[:4000]
-    embed = discord.Embed(title="📄 Tekst GPSR", description=opis, color=0x2ecc71)
+    
+    # Usuwamy ewentualne podwójne entery lub śmieci na początku
+    opis = opis.strip()
+
+    # Tworzymy Embed
+    embed = discord.Embed(
+        title="📄 Dokumentacja GPSR", 
+        color=0x2ecc71  # Twój zielony kolor
+    )
+    
+    # WRZUCAMY TEKST W BLOK KODU (```) - To daje przycisk "Copy" i czysty wygląd
+    # Używamy ```yaml dla ładnego, czytelnego fontu, lub ```text dla zwykłego
+    tekst_do_kopiowania = f"```yaml\n{opis}\n```"
+    
+    embed.description = tekst_do_kopiowania
+    embed.set_footer(text="Skopiuj treść przyciskiem lub zaznaczając tekst.")
+
     await msg.edit(content=None, embed=embed)
 
 # --- START BOTA ---
 keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
 bot.run(TOKEN)
+
