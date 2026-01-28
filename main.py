@@ -9,7 +9,7 @@ import json
 import random
 from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
-from keep_alive import keep_alive  # <--- To musi być w pliku keep_alive.py
+from keep_alive import keep_alive  # <--- To musi byc w pliku keep_alive.py
 
 # --- KONFIGURACJA! ---
 TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -24,6 +24,7 @@ ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 # --- ID KANAŁÓW ---
 KANAL_ZAMOWIENIA_ID = 1464959293681045658
 KANAL_WIADOMOSCI_ID = 1465688093808922728 
+KANAL_TRACKER_ID = 1466194659184476261 # <--- ZMIEŃ JEŚLI POTRZEBA
 
 # TREŚĆ AUTOMATYCZNEJ ODPOWIEDZI
 AUTO_REPLY_MSG = (
@@ -37,12 +38,12 @@ claude_client = AsyncAnthropic(api_key=CLAUDE_KEY)
 perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.perplexity.ai")
 
 # Zmienne globalne
-# Zmienne globalne
 allegro_token = None
-processed_order_ids = set()  # <--- NOWA ZMIENNA: Zbiór obsłużonych ID
+processed_order_ids = set() 
 processed_msg_ids = set()
 tryb_testowy = True
 responder_active = False
+sledzone_oferty = {} # Słownik: { 'ID_OFERTY': 'OSTATNIA_ILOSC_SPRZEDANYCH' }
 
 # Konfiguracja bota
 intents = discord.Intents.default()
@@ -64,7 +65,7 @@ def czy_swieze_zamowienie(data_str):
         data_zamowienia = datetime.datetime.fromisoformat(data_str.replace('Z', '+00:00'))
         teraz_utc = datetime.datetime.now(datetime.timezone.utc)
         roznica = teraz_utc - data_zamowienia
-        # ZMIANA: Wydłużono czas do 3600 sekund (1h) na wypadek restartu bota
+        # 3600 sekund (1h) na wypadek restartu bota
         return roznica.total_seconds() < 3600
     except Exception as e:
         print(f"⚠️ Błąd daty: {e}")
@@ -77,6 +78,15 @@ def parsuj_liczbe(tekst):
         return float(tekst)
     except ValueError:
         return 0.0
+
+def wyciagnij_id_z_linku(tekst):
+    import re
+    if "allegro.pl" in tekst:
+        match = re.search(r"(\d{10,})", tekst)
+        if match: return match.group(1)
+    elif tekst.isdigit():
+        return tekst
+    return None
 
 # --- LOGIKA ALLEGRO (API) ---
 async def get_allegro_token(auth_code):
@@ -186,8 +196,7 @@ async def allegro_responder():
     except Exception as e:
         print(f"Błąd Respondera: {e}")
 
-# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA (POPRAWIONA) ---
-# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA (POPRAWIONA v2) ---
+# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA ---
 @tasks.loop(seconds=60)
 async def allegro_monitor():
     global processed_order_ids, allegro_token
@@ -202,39 +211,30 @@ async def allegro_monitor():
         orders = data["checkoutForms"]
         if not orders: return
         
-        # Sortujemy od najstarszego, żeby przetwarzać chronologicznie
+        # Sortujemy od najstarszego
         orders.sort(key=lambda x: x["updatedAt"])
         
-        # --- INICJALIZACJA PO RESTARCIE ---
-        # Jeśli zbiór jest pusty (bot dopiero wstał), dodajemy obecne zamówienia do pamięci,
-        # żeby nie spamował starymi, ALE przepuszczamy te bardzo świeże (np. z ostatnich 5 min).
+        # Inicjalizacja po restarcie
         if not processed_order_ids:
             print("⚙️ Inicjalizacja bazy zamówień...")
             for order in orders:
                 processed_order_ids.add(order["id"])
-            # Po pierwszym przebiegu kończymy, żeby nie wysłać powiadomień o starych
-            # (Chyba że chcesz, aby po restarcie wysłał ostatnie - wtedy usuń 'return' poniżej)
             return 
 
         for order in orders:
             order_id = order["id"]
 
-            # SPRAWDZENIE: Czy już to widzieliśmy? (Zamiast > porównujemy obecność w zbiorze)
             if order_id in processed_order_ids:
-                continue # Już było, pomijamy
+                continue 
             
-            # Jeśli nie było, dodajemy do bazy "widzianych"
             processed_order_ids.add(order_id)
             
-            # Czyścimy pamięć, żeby nie urosła w nieskończoność (trzymamy ostatnie 100)
             if len(processed_order_ids) > 100:
                 processed_order_ids.pop()
 
-            # Sprawdzamy czy zamówienie jest świeże czasowo
             if not czy_swieze_zamowienie(order["updatedAt"]):
                 continue 
             
-            # --- TWORZENIE POWIADOMIENIA ---
             kupujacy = order["buyer"]["login"]
             kwota = order["summary"]["totalToPay"]["amount"]
             waluta = order["summary"]["totalToPay"]["currency"]
@@ -259,9 +259,53 @@ async def allegro_monitor():
     except Exception as e:
         print(f"Błąd w pętli Allegro: {e}")
 
+# --- PĘTLA TRACKERA (Śledzenie wzrostów sprzedaży) ---
+@tasks.loop(minutes=30)
+async def allegro_tracker():
+    global sledzone_oferty, allegro_token
+    
+    if not allegro_token or not sledzone_oferty:
+        return
+
+    try:
+        do_usuniecia = []
+
+        for oferta_id, stara_ilosc in sledzone_oferty.items():
+            url = f"https://api.allegro.pl/sale/offers/{oferta_id}"
+            headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        aktualna_ilosc = int(data.get("stock", {}).get("sold", 0))
+                        tytul = data.get("name", "Nieznana oferta")
+                        
+                        roznica = aktualna_ilosc - stara_ilosc
+                        
+                        if roznica > 0:
+                            channel = bot.get_channel(KANAL_TRACKER_ID)
+                            if channel:
+                                embed = discord.Embed(title="📈 SKOK SPRZEDAŻY!", color=0xe74c3c)
+                                embed.add_field(name="Produkt", value=f"[{tytul}](https://allegro.pl/oferta/{oferta_id})", inline=False)
+                                embed.add_field(name="Wzrost", value=f"🚀 **+{roznica} szt.**", inline=True)
+                                embed.add_field(name="Łącznie sprzedano", value=f"{aktualna_ilosc} szt.", inline=True)
+                                await channel.send(embed=embed)
+                            
+                            sledzone_oferty[oferta_id] = aktualna_ilosc
+                            print(f"🔥 Wzrost na ofercie {oferta_id}: +{roznica}")
+                    
+                    elif resp.status == 404:
+                        do_usuniecia.append(oferta_id)
+
+        for id_us in do_usuniecia:
+            del sledzone_oferty[id_us]
+
+    except Exception as e:
+        print(f"Błąd Trackera: {e}")
+
 # --- AI HELPERS ---
 async def generuj_opis_gpsr(produkt):
-    # Nowy, profesjonalny prompt wzorowany na przykładzie nagrzewnicy
     prompt = (
         f"Jesteś specjalistą ds. bezpieczeństwa produktów (Compliance Officer). "
         f"Napisz profesjonalną instrukcję bezpieczeństwa GPSR dla produktu: {produkt}. "
@@ -278,7 +322,6 @@ async def generuj_opis_gpsr(produkt):
     
     try:
         if not CLAUDE_KEY: return "❌ Brak klucza Claude."
-        # Zmienilem model na haiku (szybszy) lub sonnet (dokladniejszy) - zostawiam haiku dla szybkosci
         msg = await claude_client.messages.create(
             model="claude-3-haiku-20240307", 
             max_tokens=3000, 
@@ -292,10 +335,14 @@ async def generuj_opis_gpsr(produkt):
 async def on_ready():
     print(f"✅ ZALOGOWANO JAKO: {bot.user}")
     await bot.change_presence(activity=discord.Game(name="!pomoc | E-commerce"))
+    
+    # Uruchamianie pętli
     if not allegro_monitor.is_running():
         allegro_monitor.start()
     if not allegro_responder.is_running():
         allegro_responder.start()
+    if not allegro_tracker.is_running():
+        allegro_tracker.start()
 
 # --- KOMENDY ---
 @bot.command()
@@ -305,13 +352,14 @@ async def pomoc(ctx):
     embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`\n`!status`", inline=False)
     embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`", inline=False)
     embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup]`\n`!marza [zakup] [sprzedaz] [prowizja]`\n`!trend`\n`!gpsr`", inline=False)
+    embed.add_field(name="📈 Tracker", value="`!tracker [link]`\n`!lista_tracker`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
 async def status(ctx):
     token_status = "✅ POŁĄCZONY" if allegro_token else "❌ ROZŁĄCZONY"
     ilosc_w_pamieci = len(processed_order_ids)
-    await ctx.send(f"🤖 **Status Bota:**\nAllegro Token: {token_status}\nZamówień w pamięci podręcznej: {ilosc_w_pamieci}")
+    await ctx.send(f"🤖 **Status Bota:**\nAllegro Token: {token_status}\nZamówień w pamięci: {ilosc_w_pamieci}")
 
 @bot.command()
 async def auto_start(ctx):
@@ -366,29 +414,22 @@ async def allegro_kod(ctx, code: str = None):
 @bot.command()
 async def ostatnie(ctx):
     await ctx.message.delete()
-    
-    # Sprawdzenie czy jesteśmy zalogowani
     if not allegro_token:
         return await ctx.send("❌ Najpierw zaloguj się: `!allegro_login`")
 
     status_msg = await ctx.send("⏳ Pobieram listę ostatnich zamówień...")
-
     try:
         data = await fetch_orders()
-        
         if not data or "checkoutForms" not in data:
             await status_msg.edit(content="❌ Błąd pobierania danych z Allegro.")
             return
 
         orders = data["checkoutForms"]
-        
         if not orders:
             await status_msg.edit(content="📭 Brak zamówień na liście.")
             return
 
-        # Sortujemy od najnowszych
         orders.sort(key=lambda x: x["updatedAt"], reverse=True)
-
         embed = discord.Embed(title="📦 Ostatnie 5 zamówień", color=0x3498db)
 
         for i, order in enumerate(orders[:5]):
@@ -408,7 +449,6 @@ async def ostatnie(ctx):
                 value=produkty_lista,
                 inline=False
             )
-
         embed.set_footer(text=f"Wygenerowano: {polski_czas()}")
         await status_msg.edit(content=None, embed=embed)
 
@@ -417,21 +457,14 @@ async def ostatnie(ctx):
 
 @bot.command()
 async def marza(ctx, *args):
-    """
-    !marza 100            -> Sugerowane ceny
-    !marza 100 150 12     -> Oblicz zysk (zakup, sprzedaż, prowizja)
-    """
     await ctx.message.delete()
-    
     if len(args) == 0:
         return await ctx.send("❌ Użyj: `!marza [zakup] [sprzedaz] [prowizja%]`")
 
     try:
-        # Parsowanie liczb
         zakup_brutto = parsuj_liczbe(args[0])
         zakup_netto = zakup_brutto / 1.23
 
-        # --- OPCJA 1: TYLKO ZAKUP (SUGESTIE) ---
         if len(args) == 1:
             cele_zysku = [10, 20, 30, 50, 100]
             embed = discord.Embed(title=f"🛒 Zakup: {zakup_brutto:.2f} zł brutto", color=0x3498db)
@@ -439,8 +472,6 @@ async def marza(ctx, *args):
             
             tekst_sugestii = ""
             for cel in cele_zysku:
-                # Wzór: (Zysk + Zakup_netto) / (1 - podatek_dochodowy) * VAT
-                # Tutaj uproszczone pod ryczałt 3% od przychodu
                 sprzedaz_netto_wymagana = (cel + zakup_netto) / 0.97
                 sprzedaz_brutto_wymagana = sprzedaz_netto_wymagana * 1.23
                 tekst_sugestii += f"Zysk **{cel} zł** → Sprzedaj za: **{sprzedaz_brutto_wymagana:.2f} zł**\n"
@@ -448,18 +479,14 @@ async def marza(ctx, *args):
             embed.add_field(name="Kalkulacja (VAT 23% + Ryczałt 3%)", value=tekst_sugestii, inline=False)
             await ctx.send(embed=embed)
 
-        # --- OPCJA 2: OBLICZ ZYSK ---
         elif len(args) >= 2:
             sprzedaz_brutto = parsuj_liczbe(args[1])
             prowizja_procent = parsuj_liczbe(args[2]) if len(args) > 2 else 0.0
             
             sprzedaz_netto = sprzedaz_brutto / 1.23
-            
-            # Koszty
             prowizja_kwota = sprzedaz_brutto * (prowizja_procent / 100)
-            ryczalt_kwota = sprzedaz_netto * 0.03  # ZMIENNA POPRAWIONA
+            ryczalt_kwota = sprzedaz_netto * 0.03 
             
-            # Zysk
             zysk = sprzedaz_netto - zakup_netto - ryczalt_kwota - prowizja_kwota
             
             kolor = 0x2ecc71 if zysk > 0 else 0xe74c3c
@@ -481,7 +508,6 @@ async def marza(ctx, *args):
                 embed.set_footer(text="⚠️ Uwaga: Obliczono bez prowizji Allegro! Dodaj trzecią liczbę.")
             else:
                 embed.set_footer(text=f"Uwzględniono prowizję: {prowizja_procent}%")
-
             await ctx.send(embed=embed)
 
     except Exception as e:
@@ -489,12 +515,10 @@ async def marza(ctx, *args):
 
 @bot.command()
 async def trend(ctx, *, okres: str = None):
-    # KROK 1: Walidacja
     if not okres:
         await ctx.message.delete()
         return await ctx.send("❌ Podaj miesiąc, np. `!trend Luty`")
 
-    # KROK 2: Pytanie o kategorię
     pytanie = await ctx.send(
         f"📅 **Analiza na okres: {okres}**\n"
         f"Podaj konkretną kategorię (np. *Zabawki*, *Dom*) lub wpisz **nie** dla ogólnych hitów."
@@ -510,7 +534,6 @@ async def trend(ctx, *, okres: str = None):
         await pytanie.delete()
         return await ctx.send("⏰ Czas minął.")
 
-    # KROK 3: Ustalanie tematu
     if kategoria_input.lower().replace("!", "").strip() in ['nie', 'no', 'brak', 'wszystko']:
         kategoria_final = "Ogólne bestsellery (Wszystkie kategorie)"
         temat_prompt = "Wszystkie kategorie FIZYCZNYCH produktów"
@@ -520,9 +543,7 @@ async def trend(ctx, *, okres: str = None):
 
     status_msg = await ctx.send(f"⏳ **Szukam produktów na {okres}...**\nKategoria: *{kategoria_final}*")
 
-    # KROK 4: PROMPT DO AI (Poprawiony, żeby nie zwracał softwaru)
     teraz = datetime.datetime.now().strftime("%d.%m.%Y")
-    
     prompt = (
         f"Jesteś ekspertem e-commerce w Polsce. Data: {teraz}. Okres: {okres}. "
         f"Temat: {temat_prompt}. "
@@ -548,7 +569,6 @@ async def trend(ctx, *, okres: str = None):
 
         embed = discord.Embed(title=f"📈 Raport Trendów: {okres}", description=raport, color=0x9b59b6)
         embed.set_footer(text=f"Kategoria: {kategoria_final}")
-        
         await status_msg.edit(content=None, embed=embed)
 
     except Exception as e:
@@ -562,26 +582,61 @@ async def gpsr(ctx, *, produkt: str = None):
     msg = await ctx.send(f"✍️ **Generuję profesjonalny GPSR dla:** `{produkt}`...\nTo może chwilę potrwać.")
     
     opis = await generuj_opis_gpsr(produkt)
-    
-    # Usuwamy ewentualne podwójne entery lub śmieci na początku
     opis = opis.strip()
 
-    # Tworzymy Embed
-    embed = discord.Embed(
-        title="📄 Dokumentacja GPSR", 
-        color=0x2ecc71  # Twój zielony kolor
-    )
-    
-    # WRZUCAMY TEKST W BLOK KODU (```) - To daje przycisk "Copy" i czysty wygląd
-    # Używamy ```yaml dla ładnego, czytelnego fontu, lub ```text dla zwykłego
+    embed = discord.Embed(title="📄 Dokumentacja GPSR", color=0x2ecc71)
     tekst_do_kopiowania = f"```yaml\n{opis}\n```"
-    
     embed.description = tekst_do_kopiowania
     embed.set_footer(text="Skopiuj treść przyciskiem lub zaznaczając tekst.")
 
     await msg.edit(content=None, embed=embed)
 
+@bot.command()
+async def tracker(ctx, link: str = None):
+    global sledzone_oferty, allegro_token
+    
+    if not link:
+        return await ctx.send("❌ Podaj link lub numer oferty! Np. `!tracker https://allegro.pl/oferta/123...`")
+    
+    oferta_id = wyciagnij_id_z_linku(link)
+    if not oferta_id:
+        return await ctx.send("❌ Nie wykryłem poprawnego ID oferty.")
+
+    if not allegro_token:
+        return await ctx.send("❌ Bot nie jest zalogowany do Allegro.")
+
+    msg = await ctx.send("🔍 Sprawdzam ofertę...")
+
+    url = f"https://api.allegro.pl/sale/offers/{oferta_id}"
+    headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.get(url, headers=headers) as resp:
+            if resp.status == 200:
+                data = await resp.json()
+                sprzedane_total = int(data.get("stock", {}).get("sold", 0))
+                nazwa = data.get("name")
+                
+                sledzone_oferty[oferta_id] = sprzedane_total
+                
+                embed = discord.Embed(title="✅ Dodano do Trackera", color=0x2ecc71)
+                embed.description = f"Będę śledzić: **{nazwa}**\nObecnie sprzedano: **{sprzedane_total}** szt."
+                await msg.edit(content=None, embed=embed)
+            else:
+                await msg.edit(content=f"❌ Błąd API Allegro: {resp.status}")
+
+@bot.command()
+async def lista_tracker(ctx):
+    if not sledzone_oferty:
+        return await ctx.send("📭 Tracker jest pusty.")
+    
+    opis = ""
+    for oid, ilosc in sledzone_oferty.items():
+        opis += f"• ID: `{oid}` | Sprzedano: **{ilosc}**\n"
+        
+    embed = discord.Embed(title="📋 Śledzone oferty", description=opis, color=0x3498db)
+    await ctx.send(embed=embed)
+
 # --- START BOTA ---
 keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
 bot.run(TOKEN)
-
