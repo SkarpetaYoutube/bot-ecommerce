@@ -411,82 +411,85 @@ async def marza(ctx, *args):
 # --- RESZTA KOMEND ---
 
 @bot.command()
-async def trend(ctx, *, kategoria: str = None):
-    await ctx.message.delete()
-    if not kategoria: return await ctx.send("❌ Podaj kategorię, np. `!trend Smartwatche`")
-    msg = await ctx.send(f"⏳ **Analizuję: {kategoria}...**")
-    raport = await pobierz_analize_live("Obecny miesiąc", kategoria)
-    if len(raport) > 4000: raport = raport[:4000] + "..."
-    await msg.edit(content=None, embed=discord.Embed(title=f"📈 Trend: {kategoria}", description=raport, color=0x9b59b6))
+async def trend(ctx, *, okres: str = None):
+    # KROK 1: Sprawdzamy czy podano miesiąc/okres w komendzie startowej
+    if not okres:
+        await ctx.message.delete()
+        return await ctx.send("❌ Podaj miesiąc, np. `!trend Luty`")
 
-@bot.command()
-async def test_allegro(ctx):
-    await ctx.message.delete()
-    # TUTAJ UŻYWAMY KANAŁU ZAMÓWIEŃ
-    channel = bot.get_channel(KANAL_ZAMOWIENIA_ID)
-    if channel:
-        embed = discord.Embed(title="💰 TEST ZAMÓWIENIA", color=0xf1c40f)
-        embed.add_field(name="Kupujący", value="TestUser123", inline=True)
-        embed.add_field(name="Kwota", value="**149.99 PLN**", inline=True)
-        embed.add_field(name="📦 Produkty", value="• 1x **Przykładowy Produkt Premium**\n• 2x **Gratis**", inline=False)
-        embed.set_footer(text=f"ID: TEST-12345 | {polski_czas()}")
-        await channel.send(content="@here Test! 💸", embed=embed)
-    else:
-        await ctx.send(f"❌ Błąd kanału ID: {KANAL_ZAMOWIENIA_ID}")
+    # KROK 2: Pytamy o kategorię
+    pytanie = await ctx.send(
+        f"📅 **Analiza na okres: {okres}**\n"
+        f"Podaj konkretną kategorię (np. *Dom i Ogród*, *Elektronika*, *Zabawki*) "
+        f"lub wpisz **nie**, aby sprawdzić ogólne hity dla wszystkich kategorii."
+    )
 
-@bot.command()
-async def test_msg(ctx):
-    await ctx.message.delete()
-    # TUTAJ UŻYWAMY KANAŁU WIADOMOŚCI
-    channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
-    if channel:
-        embed = discord.Embed(title="🛡️ AUTO-RESPONDER (SYMULACJA)", color=0x3498db)
-        embed.description = f"Klient napisał: *Dzień dobry, kiedy wyślecie paczkę?*\n\n**W trybie LIVE bot odpisałby:**\n{AUTO_REPLY_MSG}"
-        embed.set_footer(text="To jest tylko test wyglądu.")
-        await channel.send(embed=embed)
-    else:
-        await ctx.send("❌ Błąd kanału. Sprawdź czy podałeś dobre ID wiadomości.")
+    # Funkcja sprawdzająca, czy to ten sam użytkownik odpisuje na tym samym kanale
+    def check(m):
+        return m.author == ctx.author and m.channel == ctx.channel
 
-@bot.command()
-async def hity(ctx, *, okres: str = None):
-    await ctx.message.delete()
-    if not okres: return await ctx.send("❌ Podaj okres.")
-    msg = await ctx.send(f"⏳ Szukam hitów: {okres}...")
-    raport = await pobierz_analize_live(okres, "Wszystko")
-    await msg.edit(content=None, embed=discord.Embed(title=f"🏆 Hity: {okres}", description=raport[:4000], color=0xe74c3c))
-
-@bot.command()
-async def gpsr(ctx, *, produkt: str = None):
-    await ctx.message.delete()
-    if not produkt: return await ctx.send("❌ Podaj produkt!")
-    msg = await ctx.send("⚖️ Generuję GPSR...")
-    tresc = await generuj_opis_gpsr(produkt)
-    await msg.edit(content=None, embed=discord.Embed(description=f"```text\n{tresc}\n```", color=0x3498db))
-
-@bot.command()
-async def ostatnie(ctx):
-    await ctx.message.delete()
-    if not allegro_token: return await ctx.send("❌ Zaloguj się!")
-    msg = await ctx.send("🔍 Pobieram...")
     try:
-        data = await fetch_orders()
-        if not data or "checkoutForms" not in data or not data["checkoutForms"]: return await msg.edit(content="ℹ️ Brak zamówień.")
-        orders = data["checkoutForms"]
-        orders.sort(key=lambda x: x["updatedAt"])
-        last = orders[-1]
-        prod = ", ".join([i["offer"]["name"] for i in last["lineItems"]])
-        embed = discord.Embed(title="🛒 OSTATNIE", color=0x2ecc71)
-        embed.add_field(name="Kwota", value=f"{last['summary']['totalToPay']['amount']} PLN")
-        embed.add_field(name="Produkt", value=prod)
-        embed.set_footer(text=f"ID: {last['id']}")
-        await msg.edit(content=None, embed=embed)
-    except Exception as e: await msg.edit(content=f"Błąd: {e}")
+        # Czekamy na odpowiedź użytkownika (max 60 sekund)
+        wiadomosc = await bot.wait_for('message', check=check, timeout=60.0)
+        kategoria_input = wiadomosc.content
+    except asyncio.TimeoutError:
+        await pytanie.delete()
+        return await ctx.send("⏰ Czas minął. Wpisz komendę ponownie.")
 
-if __name__ == "__main__":
-    keep_alive()
+    # KROK 3: Ustalanie tematu analizy
+    if kategoria_input.lower().replace("!", "").strip() in ['nie', 'no', 'brak', 'wszystko']:
+        kategoria_final = "Ogólne bestsellery (Wszystkie kategorie)"
+        temat_prompt = "Wszystkie kategorie fizycznych produktów"
+    else:
+        kategoria_final = kategoria_input
+        temat_prompt = f"Kategoria: {kategoria_input}"
+
+    # KROK 4: Informacja o ładowaniu
+    status_msg = await ctx.send(f"⏳ **Analizuję rynek na {okres}...**\nKategoria: *{kategoria_final}*\n*Szukam konkretnych produktów, cen i dat...*")
+
+    # KROK 5: Precyzyjny Prompt do AI (wymuszenie konkretów)
+    teraz = datetime.datetime.now().strftime("%d.%m.%Y")
+    
+    prompt = (
+        f"Jesteś ekspertem sprzedaży na Allegro i E-commerce w Polsce. "
+        f"Data raportu: {teraz}. Analizowany okres przyszły: {okres}. "
+        f"Temat: {temat_prompt}. "
+        f"Zadanie: Wymień 5 KONKRETNYCH, FIZYCZNYCH PRODUKTÓW (wyklucz usługi, software, abonamenty), "
+        f"które będą hitami sprzedażowymi w tym okresie. "
+        f"Dla każdego produktu podaj dane w formacie listy:\n"
+        f"1. **Nazwa produktu**\n"
+        f"2. **Dlaczego teraz?** (krótko o sezonie/trendzie)\n"
+        f"3. **Sugerowana cena sprzedaży** (zakres w PLN)\n"
+        f"4. **Kiedy wystawiać?** (data startu)\n"
+        f"5. **Peak sprzedaży** (kiedy będzie największy popyt)\n"
+        f"6. **Potencjał** (Niski/Średni/Wysoki)\n"
+        f"Nie pisz wstępów, podaj same konkrety. Użyj Markdown."
+    )
+
     try:
-        bot.run(TOKEN)
+        # Bezpośrednie wywołanie klienta Perplexity z nowym, lepszym promptem
+        if not PERPLEXITY_KEY:
+            await status_msg.edit(content="❌ Brak klucza API Perplexity.")
+            return
+
+        response = await perplexity_client.chat.completions.create(
+            model="sonar-pro",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        # Czyszczenie i wyświetlanie wyniku
+        raport = clean_text(response.choices[0].message.content)
+        
+        # Zabezpieczenie przed limitem znaków Discorda (4096 znaków)
+        if len(raport) > 4000: 
+            raport = raport[:4000] + "..."
+
+        embed = discord.Embed(title=f"📈 Raport Trendów: {okres}", description=raport, color=0x9b59b6)
+        embed.set_footer(text=f"Kategoria: {kategoria_final} | Model: Perplexity Sonar-Pro")
+        
+        await status_msg.edit(content=None, embed=embed)
+
     except Exception as e:
-        print(f"❌ START ERROR: {e}")
+        await status_msg.edit(content=f"❌ Błąd API: {str(e)}")
 
 
