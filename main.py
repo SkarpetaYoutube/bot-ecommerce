@@ -9,7 +9,7 @@ import json
 import random
 from anthropic import AsyncAnthropic 
 from openai import AsyncOpenAI 
-from keep_alive import keep_alive 
+from keep_alive import keep_alive  # <--- To musi być w pliku keep_alive.py
 
 # --- KONFIGURACJA ---
 TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -21,12 +21,9 @@ ALLEGRO_CLIENT_ID = os.environ.get("ALLEGRO_CLIENT_ID")
 ALLEGRO_CLIENT_SECRET = os.environ.get("ALLEGRO_CLIENT_SECRET")
 ALLEGRO_REDIRECT_URI = "http://localhost:8000"
 
-# --- ID KANAŁÓW (TUTAJ ROZDZIELILIŚMY KANAŁY) ---
-# 1. Kanał dla ZAMÓWIEŃ (pozostawiam Twój stary numer)
+# --- ID KANAŁÓW ---
 KANAL_ZAMOWIENIA_ID = 1464959293681045658
-
-# 2. Kanał dla WIADOMOŚCI (TU WKLEJ ID KANAŁU #wiadomosci-klienci)
-KANAL_WIADOMOSCI_ID = 1465688093808922728  # <--- ZMIEŃ TE ZERA NA ID KANAŁU WIADOMOŚCI!
+KANAL_WIADOMOSCI_ID = 1465688093808922728 
 
 # TREŚĆ AUTOMATYCZNEJ ODPOWIEDZI
 AUTO_REPLY_MSG = (
@@ -42,7 +39,7 @@ perplexity_client = AsyncOpenAI(api_key=PERPLEXITY_KEY, base_url="https://api.pe
 # Zmienne globalne
 allegro_token = None
 last_order_id = None
-processed_msg_ids = set() # <--- DODAJ TĘ LINIJKĘ (Pamięć powiadomień)
+processed_msg_ids = set()
 tryb_testowy = True
 responder_active = False
 
@@ -58,12 +55,10 @@ def clean_text(text):
     return text.strip()
 
 def polski_czas():
-    """Zwraca godzinę w polskiej strefie czasowej (UTC+1)"""
     czas_pl = datetime.datetime.utcnow() + datetime.timedelta(hours=1)
     return czas_pl.strftime('%H:%M')
 
 def czy_swieze_zamowienie(data_str):
-    """Sprawdza, czy zamówienie jest młodsze niż 20 minut"""
     try:
         data_zamowienia = datetime.datetime.fromisoformat(data_str.replace('Z', '+00:00'))
         teraz_utc = datetime.datetime.now(datetime.timezone.utc)
@@ -74,9 +69,8 @@ def czy_swieze_zamowienie(data_str):
         return True 
 
 def parsuj_liczbe(tekst):
-    """Zamienia tekst na float, obsługuje przecinki i %"""
     if not tekst: return 0.0
-    tekst = tekst.replace(',', '.').replace('%', '').strip()
+    tekst = str(tekst).replace(',', '.').replace('%', '').strip()
     try:
         return float(tekst)
     except ValueError:
@@ -104,13 +98,11 @@ async def fetch_orders():
             if resp.status == 200: return await resp.json()
             return None
 
-# --- AUTO-RESPONDER LOGIKA ---
 async def pobierz_wiadomosci():
     global allegro_token
     if not allegro_token: return None
     url = "https://api.allegro.pl/messaging/threads?limit=5" 
     headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
-    
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers) as resp:
             if resp.status == 200: return await resp.json()
@@ -125,7 +117,6 @@ async def wyslij_odpowiedz(thread_id, text):
         "Content-Type": "application/vnd.allegro.public.v1+json"
     }
     payload = {"text": text}
-    
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             return resp.status == 201
@@ -139,12 +130,9 @@ async def oznacz_jako_przeczytane(thread_id, last_msg_id):
         await session.put(url, headers=headers, json=payload)
 
 # --- PĘTLA AUTO-RESPONDERA ---
-# --- PĘTLA AUTO-RESPONDERA I POWIADOMIEŃ ---
 @tasks.loop(minutes=2) 
 async def allegro_responder():
     global allegro_token, tryb_testowy, responder_active, processed_msg_ids
-    
-    # ZMIANA: Usuwamy blokadę 'responder_active'. Bot ma działać w tle zawsze, gdy jest token!
     if not allegro_token: return
 
     try:
@@ -157,13 +145,11 @@ async def allegro_responder():
             author_role = last_msg["author"]["role"]
             thread_id = thread["id"]
             
-            # Sprawdzamy czy wiadomość jest świeża (np. z ostatnich 20 min)
             is_fresh = czy_swieze_zamowienie(last_msg["createdAt"]) 
 
-            # --- CZĘŚĆ 1: POWIADOMIENIE NA DISCORD (Działa ZAWSZE dla nowych wiadomości) ---
-            # Warunek: Klient + Świeża wiadomość + Nie było jeszcze powiadomienia
+            # POWIADOMIENIE
             if author_role == "BUYER" and is_fresh and msg_id not in processed_msg_ids:
-                processed_msg_ids.add(msg_id) # Zapamiętaj, że wysłano info
+                processed_msg_ids.add(msg_id)
                 
                 channel = bot.get_channel(KANAL_WIADOMOSCI_ID)
                 if channel:
@@ -178,17 +164,12 @@ async def allegro_responder():
                     await channel.send(content="@here Klient pisze!", embed=embed)
                     print(f"✅ Wysłano powiadomienie o wiadomości ID: {msg_id}")
 
-            # --- CZĘŚĆ 2: AUTO-REPLY (Działa TYLKO gdy włączone i nieprzeczytane) ---
+            # AUTO-REPLY
             if responder_active and thread["read"] == False and author_role == "BUYER":
-                
                 if tryb_testowy:
-                    # W trybie testowym tylko logujemy, że bot by odpisał
                     print(f"🛡️ [TEST] Bot odpisałby na wątek {thread_id}")
-                    # Oznaczamy wirtualnie jako "przetworzone" w logach, żeby nie spamować konsoli
                     pass 
-                
                 else:
-                    # TRYB LIVE - WYSYŁANIE ODPOWIEDZI
                     sukces = await wyslij_odpowiedz(thread_id, AUTO_REPLY_MSG)
                     if sukces:
                         print(f"🤖 Odpisano automatycznie do wątku {thread_id}")
@@ -203,7 +184,7 @@ async def allegro_responder():
     except Exception as e:
         print(f"Błąd Respondera: {e}")
 
-# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA (POLLING) ---
+# --- PĘTLA SPRAWDZAJĄCA ZAMÓWIENIA ---
 @tasks.loop(seconds=60)
 async def allegro_monitor():
     global last_order_id, allegro_token
@@ -222,7 +203,6 @@ async def allegro_monitor():
             if order["id"] > last_order_id:
                 last_order_id = order["id"] 
                 if not czy_swieze_zamowienie(order["updatedAt"]):
-                    print(f"⏳ Pominięto stare zamówienie (ID: {order['id']})")
                     continue 
                 kupujacy = order["buyer"]["login"]
                 kwota = order["summary"]["totalToPay"]["amount"]
@@ -231,7 +211,6 @@ async def allegro_monitor():
                 for item in order["lineItems"]:
                     produkty_tekst += f"• {item['quantity']}x **{item['offer']['name']}**\n"
                 
-                # TUTAJ UŻYWAMY KANAŁU ZAMÓWIEŃ
                 channel = bot.get_channel(KANAL_ZAMOWIENIA_ID)
                 if channel:
                     embed = discord.Embed(title="💰 NOWE ZAMÓWIENIE!", color=0xf1c40f)
@@ -243,25 +222,16 @@ async def allegro_monitor():
     except Exception as e:
         print(f"Błąd w pętli Allegro: {e}")
 
-# --- LOGIKA AI ---
-async def pobierz_analize_live(okres, kategoria):
-    teraz = datetime.datetime.now().strftime("%d.%m.%Y")
-    prompt = f"Ekspert E-commerce. Data: {teraz}. Analiza: {okres}. Temat: {kategoria}. Wymień 5 hitów sprzedażowych w Polsce (Markdown, lista)."
-    try:
-        if not PERPLEXITY_KEY: return "❌ Brak klucza Perplexity."
-        response = await perplexity_client.chat.completions.create(model="sonar-pro", messages=[{"role": "user", "content": prompt}])
-        return clean_text(response.choices[0].message.content)
-    except Exception as e: return f"Błąd AI: {str(e)}"
-
+# --- AI HELPERS ---
 async def generuj_opis_gpsr(produkt):
     prompt = f"Napisz tekst GPSR dla: {produkt}. Struktura: 1. Bezpieczeństwo, 2. Dzieci, 3. Utylizacja."
     try:
         if not CLAUDE_KEY: return "❌ Brak klucza Claude."
-        msg = await claude_client.messages.create(model="claude-haiku-4-5-20251001", max_tokens=2500, messages=[{"role": "user", "content": prompt}])
+        msg = await claude_client.messages.create(model="claude-3-haiku-20240307", max_tokens=2500, messages=[{"role": "user", "content": prompt}])
         return msg.content[0].text
     except Exception as e: return f"Błąd: {e}"
 
-# --- EVENTY I START ---
+# --- EVENTY ---
 @bot.event
 async def on_ready():
     print(f"✅ ZALOGOWANO JAKO: {bot.user}")
@@ -277,8 +247,8 @@ async def pomoc(ctx):
     await ctx.message.delete()
     embed = discord.Embed(title="🛠️ Menu Bota", color=0xff9900)
     embed.add_field(name="🔑 Allegro", value="`!allegro_login`\n`!ostatnie`", inline=False)
-    embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg` (Symulacja)", inline=False)
-    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup]` -> Sugerowane ceny\n`!marza [zakup] [sprzedaz]` -> Oblicz zysk\n`!trend`\n`!gpsr`", inline=False)
+    embed.add_field(name="🤖 Auto-Responder", value="`!auto_start`\n`!tryb_live`\n`!tryb_test`\n`!test_msg`", inline=False)
+    embed.add_field(name="🧠 Narzędzia", value="`!marza [zakup]`\n`!marza [zakup] [sprzedaz] [prowizja]`\n`!trend`\n`!gpsr`", inline=False)
     await ctx.send(embed=embed)
 
 @bot.command()
@@ -301,14 +271,14 @@ async def tryb_live(ctx):
     await ctx.message.delete()
     global tryb_testowy
     tryb_testowy = False
-    await ctx.send("🔥 **UWAGA! Tryb LIVE włączony.** Bot będzie teraz automatycznie odpisywał klientom na Allegro!")
+    await ctx.send("🔥 **UWAGA! Tryb LIVE włączony.** Bot będzie odpisywał klientom!")
 
 @bot.command()
 async def tryb_test(ctx):
     await ctx.message.delete()
     global tryb_testowy
     tryb_testowy = True
-    await ctx.send("🛡️ Tryb TESTOWY włączony. Bot nie będzie wysyłał wiadomości do klientów, tylko powiadomi na Discordzie.")
+    await ctx.send("🛡️ Tryb TESTOWY włączony. Tylko powiadomienia na Discord.")
 
 @bot.command()
 async def allegro_login(ctx):
@@ -334,10 +304,8 @@ async def allegro_kod(ctx, code: str = None):
 @bot.command()
 async def marza(ctx, *args):
     """
-    Użycie:
-    1. !marza 100        -> Sugerowane ceny (przy założeniu 0% prowizji)
-    2. !marza 100 150    -> Oblicza zysk (przy założeniu 0% prowizji)
-    3. !marza 100 150 12 -> Oblicza zysk (zakup 100, sprzedaż 150, prowizja 12%)
+    !marza 100            -> Sugerowane ceny
+    !marza 100 150 12     -> Oblicz zysk (zakup, sprzedaż, prowizja)
     """
     await ctx.message.delete()
     
@@ -345,18 +313,20 @@ async def marza(ctx, *args):
         return await ctx.send("❌ Użyj: `!marza [zakup] [sprzedaz] [prowizja%]`")
 
     try:
-        # Parsowanie pierwszego argumentu (ZAKUP)
+        # Parsowanie liczb
         zakup_brutto = parsuj_liczbe(args[0])
         zakup_netto = zakup_brutto / 1.23
 
-        # --- OPCJA 1: TYLKO CENA ZAKUPU (Sugerowane ceny) ---
+        # --- OPCJA 1: TYLKO ZAKUP (SUGESTIE) ---
         if len(args) == 1:
             cele_zysku = [10, 20, 30, 50, 100]
             embed = discord.Embed(title=f"🛒 Zakup: {zakup_brutto:.2f} zł brutto", color=0x3498db)
-            embed.description = "**Sugerowane ceny sprzedaży** (aby mieć X zł na rękę):\n*Nie uwzględniono prowizji Allegro!*"
+            embed.description = "**Sugerowane ceny sprzedaży** (bez prowizji Allegro!):"
             
             tekst_sugestii = ""
             for cel in cele_zysku:
+                # Wzór: (Zysk + Zakup_netto) / (1 - podatek_dochodowy) * VAT
+                # Tutaj uproszczone pod ryczałt 3% od przychodu
                 sprzedaz_netto_wymagana = (cel + zakup_netto) / 0.97
                 sprzedaz_brutto_wymagana = sprzedaz_netto_wymagana * 1.23
                 tekst_sugestii += f"Zysk **{cel} zł** → Sprzedaj za: **{sprzedaz_brutto_wymagana:.2f} zł**\n"
@@ -364,27 +334,22 @@ async def marza(ctx, *args):
             embed.add_field(name="Kalkulacja (VAT 23% + Ryczałt 3%)", value=tekst_sugestii, inline=False)
             await ctx.send(embed=embed)
 
-        # --- OPCJA 2: ZAKUP + SPRZEDAŻ (+ opcjonalna PROWIZJA) ---
+        # --- OPCJA 2: OBLICZ ZYSK ---
         elif len(args) >= 2:
             sprzedaz_brutto = parsuj_liczbe(args[1])
             prowizja_procent = parsuj_liczbe(args[2]) if len(args) > 2 else 0.0
             
-            # Obliczenia
             sprzedaz_netto = sprzedaz_brutto / 1.23
             
             # Koszty
             prowizja_kwota = sprzedaz_brutto * (prowizja_procent / 100)
-            ryczalt = sprzedaz_netto * 0.03
+            ryczalt_kwota = sprzedaz_netto * 0.03  # ZMIENNA POPRAWIONA
             
-            # Zysk na czysto
-            zysk = sprzedaz_netto - zakup_netto - ryczalt - prowizja_kwota
+            # Zysk
+            zysk = sprzedaz_netto - zakup_netto - ryczalt_kwota - prowizja_kwota
             
-            if zysk > 0:
-                kolor = 0x2ecc71 # Zielony
-                emoji = "✅"
-            else:
-                kolor = 0xe74c3c # Czerwony
-                emoji = "⚠️"
+            kolor = 0x2ecc71 if zysk > 0 else 0xe74c3c
+            emoji = "✅" if zysk > 0 else "⚠️"
 
             embed = discord.Embed(title=f"{emoji} Wynik Transakcji", color=kolor)
             embed.add_field(name="1. Ceny", value=f"Zakup: **{zakup_brutto:.2f} zł**\nSprzedaż: **{sprzedaz_brutto:.2f} zł**", inline=False)
@@ -392,82 +357,69 @@ async def marza(ctx, *args):
             koszty_txt = (
                 f"• Towar netto: {zakup_netto:.2f} zł\n"
                 f"• Prowizja Allegro ({prowizja_procent}%): **-{prowizja_kwota:.2f} zł**\n"
-                f"• Ryczałt (3%): -{ryczalt:.2f} zł\n"
+                f"• Ryczałt (3%): -{ryczalt_kwota:.2f} zł\n"
                 f"• VAT (23%): wliczony w netto"
             )
             embed.add_field(name="2. Koszty i Podatki", value=koszty_txt, inline=False)
             embed.add_field(name="3. ZYSK NA RĘKĘ", value=f"💰 **{zysk:.2f} zł**", inline=False)
             
             if prowizja_procent == 0:
-                embed.set_footer(text="⚠️ Uwaga: Obliczono bez prowizji Allegro! Dodaj trzecią liczbę, np. !marza 100 150 12")
+                embed.set_footer(text="⚠️ Uwaga: Obliczono bez prowizji Allegro! Dodaj trzecią liczbę.")
             else:
                 embed.set_footer(text=f"Uwzględniono prowizję: {prowizja_procent}%")
 
             await ctx.send(embed=embed)
 
     except Exception as e:
-        await ctx.send(f"❌ Błąd obliczeń: {e}")
-
-# --- RESZTA KOMEND ---
+        await ctx.send(f"❌ Błąd obliczeń: {str(e)}")
 
 @bot.command()
 async def trend(ctx, *, okres: str = None):
-    # KROK 1: Sprawdzamy czy podano miesiąc/okres w komendzie startowej
+    # KROK 1: Walidacja
     if not okres:
         await ctx.message.delete()
         return await ctx.send("❌ Podaj miesiąc, np. `!trend Luty`")
 
-    # KROK 2: Pytamy o kategorię
+    # KROK 2: Pytanie o kategorię
     pytanie = await ctx.send(
         f"📅 **Analiza na okres: {okres}**\n"
-        f"Podaj konkretną kategorię (np. *Dom i Ogród*, *Elektronika*, *Zabawki*) "
-        f"lub wpisz **nie**, aby sprawdzić ogólne hity dla wszystkich kategorii."
+        f"Podaj konkretną kategorię (np. *Zabawki*, *Dom*) lub wpisz **nie** dla ogólnych hitów."
     )
 
-    # Funkcja sprawdzająca, czy to ten sam użytkownik odpisuje na tym samym kanale
     def check(m):
         return m.author == ctx.author and m.channel == ctx.channel
 
     try:
-        # Czekamy na odpowiedź użytkownika (max 60 sekund)
         wiadomosc = await bot.wait_for('message', check=check, timeout=60.0)
         kategoria_input = wiadomosc.content
     except asyncio.TimeoutError:
         await pytanie.delete()
-        return await ctx.send("⏰ Czas minął. Wpisz komendę ponownie.")
+        return await ctx.send("⏰ Czas minął.")
 
-    # KROK 3: Ustalanie tematu analizy
+    # KROK 3: Ustalanie tematu
     if kategoria_input.lower().replace("!", "").strip() in ['nie', 'no', 'brak', 'wszystko']:
         kategoria_final = "Ogólne bestsellery (Wszystkie kategorie)"
-        temat_prompt = "Wszystkie kategorie fizycznych produktów"
+        temat_prompt = "Wszystkie kategorie FIZYCZNYCH produktów"
     else:
         kategoria_final = kategoria_input
-        temat_prompt = f"Kategoria: {kategoria_input}"
+        temat_prompt = f"Kategoria produktu fizycznego: {kategoria_input}"
 
-    # KROK 4: Informacja o ładowaniu
-    status_msg = await ctx.send(f"⏳ **Analizuję rynek na {okres}...**\nKategoria: *{kategoria_final}*\n*Szukam konkretnych produktów, cen i dat...*")
+    status_msg = await ctx.send(f"⏳ **Szukam produktów na {okres}...**\nKategoria: *{kategoria_final}*")
 
-    # KROK 5: Precyzyjny Prompt do AI (wymuszenie konkretów)
+    # KROK 4: PROMPT DO AI (Poprawiony, żeby nie zwracał softwaru)
     teraz = datetime.datetime.now().strftime("%d.%m.%Y")
     
     prompt = (
-        f"Jesteś ekspertem sprzedaży na Allegro i E-commerce w Polsce. "
-        f"Data raportu: {teraz}. Analizowany okres przyszły: {okres}. "
+        f"Jesteś ekspertem e-commerce w Polsce. Data: {teraz}. Okres: {okres}. "
         f"Temat: {temat_prompt}. "
-        f"Zadanie: Wymień 5 KONKRETNYCH, FIZYCZNYCH PRODUKTÓW (wyklucz usługi, software, abonamenty), "
-        f"które będą hitami sprzedażowymi w tym okresie. "
-        f"Dla każdego produktu podaj dane w formacie listy:\n"
-        f"1. **Nazwa produktu**\n"
-        f"2. **Dlaczego teraz?** (krótko o sezonie/trendzie)\n"
-        f"3. **Sugerowana cena sprzedaży** (zakres w PLN)\n"
-        f"4. **Kiedy wystawiać?** (data startu)\n"
-        f"5. **Peak sprzedaży** (kiedy będzie największy popyt)\n"
-        f"6. **Potencjał** (Niski/Średni/Wysoki)\n"
-        f"Nie pisz wstępów, podaj same konkrety. Użyj Markdown."
+        f"Twoim zadaniem jest znalezienie 5 FIZYCZNYCH PRODUKTÓW do dropshippingu/sprzedaży (physical goods ONLY). "
+        f"BARDZO WAŻNE: Ignoruj oprogramowanie, usługi SaaS, bramki płatności i aplikacje. Interesują mnie tylko przedmioty, które można zapakować w paczkę. "
+        f"Format odpowiedzi (Markdown): "
+        f"1. **Nazwa Produktu**\n2. **Dlaczego teraz?**\n3. **Cena sprzedaży (PLN)**\n4. **Potencjał**\n"
+        f"Podaj same konkrety."
     )
 
     try:
-        # Bezpośrednie wywołanie klienta Perplexity z nowym, lepszym promptem
         if not PERPLEXITY_KEY:
             await status_msg.edit(content="❌ Brak klucza API Perplexity.")
             return
@@ -477,19 +429,26 @@ async def trend(ctx, *, okres: str = None):
             messages=[{"role": "user", "content": prompt}]
         )
         
-        # Czyszczenie i wyświetlanie wyniku
         raport = clean_text(response.choices[0].message.content)
-        
-        # Zabezpieczenie przed limitem znaków Discorda (4096 znaków)
-        if len(raport) > 4000: 
-            raport = raport[:4000] + "..."
+        if len(raport) > 4000: raport = raport[:4000] + "..."
 
         embed = discord.Embed(title=f"📈 Raport Trendów: {okres}", description=raport, color=0x9b59b6)
-        embed.set_footer(text=f"Kategoria: {kategoria_final} | Model: Perplexity Sonar-Pro")
+        embed.set_footer(text=f"Kategoria: {kategoria_final}")
         
         await status_msg.edit(content=None, embed=embed)
 
     except Exception as e:
         await status_msg.edit(content=f"❌ Błąd API: {str(e)}")
 
+@bot.command()
+async def gpsr(ctx, *, produkt: str = None):
+    if not produkt: return await ctx.send("❌ Podaj nazwę produktu, np. `!gpsr Latarka LED`")
+    msg = await ctx.send(f"✍️ Piszę GPSR dla: **{produkt}**...")
+    opis = await generuj_opis_gpsr(produkt)
+    if len(opis) > 4000: opis = opis[:4000]
+    embed = discord.Embed(title="📄 Tekst GPSR", description=opis, color=0x2ecc71)
+    await msg.edit(content=None, embed=embed)
 
+# --- START BOTA ---
+keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
+bot.run(TOKEN)
