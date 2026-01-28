@@ -260,6 +260,7 @@ async def allegro_monitor():
         print(f"Błąd w pętli Allegro: {e}")
 
 # --- PĘTLA TRACKERA (Śledzenie wzrostów sprzedaży) ---
+# --- PĘTLA TRACKERA (Śledzenie wzrostów sprzedaży) ---
 @tasks.loop(minutes=30)
 async def allegro_tracker():
     global sledzone_oferty, allegro_token
@@ -271,32 +272,51 @@ async def allegro_tracker():
         do_usuniecia = []
 
         for oferta_id, stara_ilosc in sledzone_oferty.items():
-            url = f"https://api.allegro.pl/sale/offers/{oferta_id}"
+            # ZMIANA ENDPOINTU NA PUBLICZNY (LISTING)
+            url = f"https://api.allegro.pl/offers/listing?offer.id={oferta_id}"
             headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
             
             async with aiohttp.ClientSession() as session:
                 async with session.get(url, headers=headers) as resp:
                     if resp.status == 200:
                         data = await resp.json()
-                        aktualna_ilosc = int(data.get("stock", {}).get("sold", 0))
-                        tytul = data.get("name", "Nieznana oferta")
                         
-                        roznica = aktualna_ilosc - stara_ilosc
+                        # Szukamy oferty w wynikach (może być w 'regular' lub 'promoted')
+                        items = data.get("items", {})
+                        oferta = None
                         
-                        if roznica > 0:
-                            channel = bot.get_channel(KANAL_TRACKER_ID)
-                            if channel:
-                                embed = discord.Embed(title="📈 SKOK SPRZEDAŻY!", color=0xe74c3c)
-                                embed.add_field(name="Produkt", value=f"[{tytul}](https://allegro.pl/oferta/{oferta_id})", inline=False)
-                                embed.add_field(name="Wzrost", value=f"🚀 **+{roznica} szt.**", inline=True)
-                                embed.add_field(name="Łącznie sprzedano", value=f"{aktualna_ilosc} szt.", inline=True)
-                                await channel.send(embed=embed)
+                        # Sprawdzamy listę zwykłą i promowaną
+                        wszystkie_oferty = items.get("regular", []) + items.get("promoted", [])
+                        if wszystkie_oferty:
+                            oferta = wszystkie_oferty[0] # Bierzemy pierwszą (powinna być jedyna bo szukamy po ID)
+
+                        if oferta:
+                            # Popularity to liczba kupujących/sprzedanych sztuk w API publicznym
+                            aktualna_ilosc = int(oferta.get("sellingMode", {}).get("popularity", 0))
+                            tytul = oferta.get("name", "Nieznana oferta")
                             
-                            sledzone_oferty[oferta_id] = aktualna_ilosc
-                            print(f"🔥 Wzrost na ofercie {oferta_id}: +{roznica}")
+                            roznica = aktualna_ilosc - stara_ilosc
+                            
+                            if roznica > 0:
+                                channel = bot.get_channel(KANAL_TRACKER_ID)
+                                if channel:
+                                    embed = discord.Embed(title="📈 SKOK SPRZEDAŻY!", color=0xe74c3c)
+                                    embed.add_field(name="Produkt", value=f"[{tytul}](https://allegro.pl/oferta/{oferta_id})", inline=False)
+                                    embed.add_field(name="Wzrost", value=f"🚀 **+{roznica} szt.**", inline=True)
+                                    embed.add_field(name="Łącznie sprzedano", value=f"{aktualna_ilosc} szt.", inline=True)
+                                    # 
+                                    await channel.send(embed=embed)
+                                
+                                sledzone_oferty[oferta_id] = aktualna_ilosc
+                                print(f"🔥 Wzrost na ofercie {oferta_id}: +{roznica}")
+                        else:
+                             print(f"⚠️ Nie znaleziono danych dla ID {oferta_id} w Listingu")
                     
                     elif resp.status == 404:
                         do_usuniecia.append(oferta_id)
+                    else:
+                        # Tutaj podglądamy błąd jeśli inny niż 404
+                        print(f"⚠️ Błąd Trackera {resp.status} dla {oferta_id}")
 
         for id_us in do_usuniecia:
             del sledzone_oferty[id_us]
@@ -605,24 +625,39 @@ async def tracker(ctx, link: str = None):
     if not allegro_token:
         return await ctx.send("❌ Bot nie jest zalogowany do Allegro.")
 
-    msg = await ctx.send("🔍 Sprawdzam ofertę...")
+    msg = await ctx.send("🔍 Sprawdzam ofertę (Public API)...")
 
-    url = f"https://api.allegro.pl/sale/offers/{oferta_id}"
+    # ZMIANA NA LISTING (Publiczny)
+    url = f"https://api.allegro.pl/offers/listing?offer.id={oferta_id}"
     headers = {"Authorization": f"Bearer {allegro_token}", "Accept": "application/vnd.allegro.public.v1+json"}
     
     async with aiohttp.ClientSession() as session:
         async with session.get(url, headers=headers) as resp:
             if resp.status == 200:
                 data = await resp.json()
-                sprzedane_total = int(data.get("stock", {}).get("sold", 0))
-                nazwa = data.get("name")
                 
-                sledzone_oferty[oferta_id] = sprzedane_total
+                # Logika wyciągania z listingu
+                items = data.get("items", {})
+                wszystkie_oferty = items.get("regular", []) + items.get("promoted", [])
                 
-                embed = discord.Embed(title="✅ Dodano do Trackera", color=0x2ecc71)
-                embed.description = f"Będę śledzić: **{nazwa}**\nObecnie sprzedano: **{sprzedane_total}** szt."
-                await msg.edit(content=None, embed=embed)
+                if wszystkie_oferty:
+                    oferta = wszystkie_oferty[0]
+                    sprzedane_total = int(oferta.get("sellingMode", {}).get("popularity", 0))
+                    nazwa = oferta.get("name")
+                    cena = oferta.get("sellingMode", {}).get("price", {}).get("amount", "???")
+                    waluta = oferta.get("sellingMode", {}).get("price", {}).get("currency", "PLN")
+                    
+                    sledzone_oferty[oferta_id] = sprzedane_total
+                    
+                    embed = discord.Embed(title="✅ Dodano do Trackera", color=0x2ecc71)
+                    embed.description = f"Będę śledzić: **{nazwa}**\nCena: **{cena} {waluta}**\nObecnie sprzedano: **{sprzedane_total}** szt."
+                    embed.set_footer(text="Będę sprawdzać co 30 min.")
+                    await msg.edit(content=None, embed=embed)
+                else:
+                    await msg.edit(content="❌ Nie znaleziono takiej oferty w API publicznym.")
             else:
+                tekst_bledu = await resp.text()
+                print(f"BŁĄD API: {tekst_bledu}") # To nam pokaże w konsoli co jest nie tak
                 await msg.edit(content=f"❌ Błąd API Allegro: {resp.status}")
 
 @bot.command()
@@ -640,5 +675,6 @@ async def lista_tracker(ctx):
 # --- START BOTA ---
 keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
 bot.run(TOKEN)
+
 
 
