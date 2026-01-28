@@ -641,7 +641,4 @@ async def lista_tracker(ctx):
 keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
 bot.run(TOKEN)
 
-# Zamiast tylko print(response.status_code)
-if response.status_code == 403:
-    print("BŁĄD 403 TREŚĆ:", response.json()) 
-    # To zwróci np.: "Access denied. Token is missing scope: allegro:api:sale:offers:read"
+
