@@ -7,11 +7,11 @@ import aiohttp
 import base64
 import json
 import random
-from anthropic import AsyncAnthropic 
-from openai import AsyncOpenAI 
+from anthropic import AsyncAnthropic
+from openai import AsyncOpenAI
 from keep_alive import keep_alive  # <--- To musi być w pliku keep_alive.py
 
-# --- KONFIGURACJA ---
+# --- KONFIGURACJA! ---
 TOKEN = os.environ.get("DISCORD_TOKEN")
 CLAUDE_KEY = os.environ.get("CLAUDE_API_KEY") or os.environ.get("CLAUDE_TOKEN")
 PERPLEXITY_KEY = os.environ.get("PERPLEXITY_API_KEY") or os.environ.get("PERPLEXITY_TOKEN")
@@ -320,6 +320,59 @@ async def allegro_kod(ctx, code: str = None):
     else:
         await msg.edit(content="❌ Błąd logowania.")
 
+# <--- TUTAJA WSTAWIŁEM NOWĄ KOMENDĘ --->
+@bot.command()
+async def ostatnie(ctx):
+    await ctx.message.delete()
+    
+    # Sprawdzenie czy jesteśmy zalogowani
+    if not allegro_token:
+        return await ctx.send("❌ Najpierw zaloguj się: `!allegro_login`")
+
+    status_msg = await ctx.send("⏳ Pobieram listę ostatnich zamówień...")
+
+    try:
+        data = await fetch_orders()
+        
+        if not data or "checkoutForms" not in data:
+            await status_msg.edit(content="❌ Błąd pobierania danych z Allegro.")
+            return
+
+        orders = data["checkoutForms"]
+        
+        if not orders:
+            await status_msg.edit(content="📭 Brak zamówień na liście.")
+            return
+
+        # Sortujemy od najnowszych
+        orders.sort(key=lambda x: x["updatedAt"], reverse=True)
+
+        embed = discord.Embed(title="📦 Ostatnie 5 zamówień", color=0x3498db)
+
+        for i, order in enumerate(orders[:5]):
+            kupujacy = order["buyer"]["login"]
+            kwota = order["summary"]["totalToPay"]["amount"]
+            waluta = order["summary"]["totalToPay"]["currency"]
+            status = order["status"]
+            
+            produkty_lista = ""
+            for item in order["lineItems"]:
+                produkty_lista += f"• {item['quantity']}x {item['offer']['name']}\n"
+            
+            if len(produkty_lista) > 1000: produkty_lista = produkty_lista[:1000] + "..."
+
+            embed.add_field(
+                name=f"{i+1}. {kupujacy} ({kwota} {waluta}) [{status}]",
+                value=produkty_lista,
+                inline=False
+            )
+
+        embed.set_footer(text=f"Wygenerowano: {polski_czas()}")
+        await status_msg.edit(content=None, embed=embed)
+
+    except Exception as e:
+        await status_msg.edit(content=f"❌ Wystąpił błąd: {e}")
+
 @bot.command()
 async def marza(ctx, *args):
     """
@@ -489,4 +542,3 @@ async def gpsr(ctx, *, produkt: str = None):
 # --- START BOTA ---
 keep_alive()  # <--- TO JEST KLUCZOWE DLA RENDER.COM
 bot.run(TOKEN)
-
